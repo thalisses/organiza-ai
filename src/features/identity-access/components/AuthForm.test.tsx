@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AuthForm from './AuthForm';
@@ -48,6 +48,22 @@ vi.mock('../../territory-map/components/CityMap', () => ({
   default: () => <section aria-label="Mapa urbano principal de Maringá" />,
 }));
 
+vi.mock('../../acts/components/ActManagement', () => ({
+  default: () => <section aria-label="Gestão de atos" />,
+}));
+
+vi.mock('../../acts/components/ActAgenda', () => ({
+  default: () => <section aria-label="Agenda de atos" />,
+}));
+
+vi.mock('../../material-points/components/MaterialPointManagement', () => ({
+  default: () => <section aria-label="Gestão de locais de retirada" />,
+}));
+
+vi.mock('../../material-points/components/MaterialPointDiscovery', () => ({
+  default: () => <section aria-label="Descoberta de locais de retirada" />,
+}));
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
@@ -73,6 +89,7 @@ describe('AuthForm', () => {
   it('starts in login mode with visible, associated labels', () => {
     render(<AuthForm />);
 
+    expect(screen.getByText('★')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Organiza AI' })).toBeTruthy();
     expect(screen.getByLabelText('E-mail')).toBeTruthy();
     expect(screen.getByLabelText('Senha')).toBeTruthy();
@@ -93,6 +110,10 @@ describe('AuthForm', () => {
 
     expect(screen.getByText('Sessão ativa.')).toBeTruthy();
     expect(await screen.findByRole('region', { name: 'Mapa urbano principal de Maringá' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Gestão de atos' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Agenda de atos' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Gestão de locais de retirada' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Descoberta de locais de retirada' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Sair' })).toBeTruthy();
 
     act(() => updateSession(false));
@@ -115,6 +136,7 @@ describe('AuthForm', () => {
     expect(screen.getByLabelText('E-mail')).toBeTruthy();
     expect(screen.getByLabelText('Senha')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Disponibilidade semanal' })).toBeTruthy();
+    expect(screen.getByRole('group', { name: 'Novo intervalo' })).toBeTruthy();
   });
 
   it('requires all signup fields before submission', async () => {
@@ -166,9 +188,16 @@ describe('AuthForm', () => {
     await user.click(screen.getByRole('button', { name: 'Criar conta' }));
     await user.type(screen.getByLabelText('Seu nome'), 'Participante Um');
     await user.type(screen.getByLabelText('WhatsApp'), '(44) 99999-1234');
+    const newInterval = screen.getByRole('group', { name: 'Novo intervalo' });
+    await user.click(within(newInterval).getByRole('button', { name: 'Segunda-feira' }));
+    await user.click(within(newInterval).getByRole('button', { name: 'Quarta-feira' }));
+    fireEvent.change(within(newInterval).getByLabelText('Horário inicial'), {
+      target: { value: '09:00' },
+    });
+    fireEvent.change(within(newInterval).getByLabelText('Horário final'), {
+      target: { value: '12:00' },
+    });
     await user.click(screen.getByRole('button', { name: 'Adicionar intervalo' }));
-    fireEvent.change(screen.getByLabelText('Horário inicial'), { target: { value: '09:00' } });
-    fireEvent.change(screen.getByLabelText('Horário final'), { target: { value: '12:00' } });
     await user.type(screen.getByLabelText('E-mail'), 'pessoa@example.test');
     await user.type(screen.getByLabelText('Senha'), 'test-password');
     await user.click(screen.getByRole('button', { name: 'Cadastrar' }));
@@ -178,7 +207,10 @@ describe('AuthForm', () => {
       whatsapp: '(44) 99999-1234',
       email: 'pessoa@example.test',
       password: 'test-password',
-      availability: [{ dayOfWeek: 1, startsAt: '09:00', endsAt: '12:00' }],
+      availability: [
+        { dayOfWeek: 1, startsAt: '09:00', endsAt: '12:00' },
+        { dayOfWeek: 3, startsAt: '09:00', endsAt: '12:00' },
+      ],
     });
     expect(await screen.findByText('Sessão iniciada.')).toBeTruthy();
   });
@@ -201,9 +233,15 @@ describe('AuthForm', () => {
     await user.click(screen.getByRole('button', { name: 'Criar conta' }));
     await user.type(screen.getByLabelText('Seu nome'), 'Participante Um');
     await user.type(screen.getByLabelText('WhatsApp'), '(44) 99999-1234');
+    const newInterval = screen.getByRole('group', { name: 'Novo intervalo' });
+    await user.click(within(newInterval).getByRole('button', { name: 'Segunda-feira' }));
+    fireEvent.change(within(newInterval).getByLabelText('Horário inicial'), {
+      target: { value: '09:00' },
+    });
+    fireEvent.change(within(newInterval).getByLabelText('Horário final'), {
+      target: { value: '12:00' },
+    });
     await user.click(screen.getByRole('button', { name: 'Adicionar intervalo' }));
-    fireEvent.change(screen.getByLabelText('Horário inicial'), { target: { value: '09:00' } });
-    fireEvent.change(screen.getByLabelText('Horário final'), { target: { value: '12:00' } });
     await user.type(screen.getByLabelText('E-mail'), 'pessoa@example.test');
     await user.type(screen.getByLabelText('Senha'), 'test-password');
     await user.click(screen.getByRole('button', { name: 'Cadastrar' }));

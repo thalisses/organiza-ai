@@ -14,6 +14,10 @@ import AvailabilityManager from './AvailabilityManager';
 import SectorLeaderManagement from './SectorLeaderManagement';
 
 const CityMap = lazy(() => import('../../territory-map/components/CityMap'));
+const ActManagement = lazy(() => import('../../acts/components/ActManagement'));
+const ActAgenda = lazy(() => import('../../acts/components/ActAgenda'));
+const MaterialPointManagement = lazy(() => import('../../material-points/components/MaterialPointManagement'));
+const MaterialPointDiscovery = lazy(() => import('../../material-points/components/MaterialPointDiscovery'));
 
 type AuthMode = 'login' | 'signup';
 
@@ -117,7 +121,7 @@ export default function AuthForm() {
     <main className="auth-page">
       <aside className="auth-identity" aria-label="Organiza AI em Maringá">
         <div className="identity-topline">
-          <span className="brand-mark" aria-hidden="true">O</span>
+          <span className="brand-mark" aria-hidden="true">★</span>
           <span>Organiza AI</span>
         </div>
         <div className="identity-copy">
@@ -213,6 +217,7 @@ export default function AuthForm() {
                 />
 
                 <AvailabilityEditor
+                  allowMultipleDays
                   onChange={setAvailability}
                   windows={availability}
                 />
@@ -254,6 +259,18 @@ export default function AuthForm() {
               <p role="status">Sessão ativa.</p>
               <Suspense fallback={<p className="city-map-loading" role="status">Carregando mapa urbano…</p>}>
                 <CityMap />
+              </Suspense>
+              <Suspense fallback={<p role="status">Carregando gestão de atos…</p>}>
+                <ActManagement />
+              </Suspense>
+              <Suspense fallback={<p role="status">Carregando agenda de atos…</p>}>
+                <ActAgenda />
+              </Suspense>
+              <Suspense fallback={<p role="status">Carregando gestão de locais de retirada…</p>}>
+                <MaterialPointManagement />
+              </Suspense>
+              <Suspense fallback={<p role="status">Carregando locais de retirada…</p>}>
+                <MaterialPointDiscovery />
               </Suspense>
               <SectorLeaderManagement />
               <AvailabilityManager />

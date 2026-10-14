@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { Geometry } from 'geojson';
+import type { ManualSubdivision } from '../lib/territoryService';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import CityMap from './CityMap';
 
@@ -10,6 +11,7 @@ const {
   fitBoundsMock,
   loadActiveMembershipsMock,
   loadMyMembershipMock,
+  loadMyRegionMembershipsMock,
   loadRoleMock,
   loadVisibleRegionSetMock,
   mapOffMock,
@@ -19,6 +21,7 @@ const {
   saveRegionPartitionMock,
   saveSubdivisionEditsMock,
   setMyMembershipMock,
+  setMyRegionMembershipsMock,
   subdivisionLayerDisableMock,
   subdivisionLayerEnableMock,
   subdivisionLayerOnMock,
@@ -31,6 +34,7 @@ const {
   fitBoundsMock: vi.fn(),
   loadActiveMembershipsMock: vi.fn(),
   loadMyMembershipMock: vi.fn(),
+  loadMyRegionMembershipsMock: vi.fn(),
   loadRoleMock: vi.fn(),
   loadVisibleRegionSetMock: vi.fn(),
   mapOffMock: vi.fn(),
@@ -40,6 +44,7 @@ const {
   saveRegionPartitionMock: vi.fn(),
   saveSubdivisionEditsMock: vi.fn(),
   setMyMembershipMock: vi.fn(),
+  setMyRegionMembershipsMock: vi.fn(),
   subdivisionLayerDisableMock: vi.fn(),
   subdivisionLayerEnableMock: vi.fn(),
   subdivisionLayerOnMock: vi.fn(),
@@ -125,15 +130,26 @@ vi.mock('../../identity-access/lib/roleManagementService', () => ({
   loadCurrentUserRole: loadRoleMock,
 }));
 
+vi.mock('./SubdivisionCutEditor', () => ({
+  default: ({ regionId, regionName, onCreated }: { regionId: string; regionName: string; onCreated?: (area: ManualSubdivision) => void }) => (
+    <section aria-label={`Subregiões de ${regionName}`} data-region-id={regionId}>
+      <button type="button" onClick={() => onCreated?.({ id:'34567890-1234-4234-8234-123456789abc',regionId,number:1,
+        geometry:{type:'MultiPolygon',coordinates:[[[[0,0],[1,0],[1,1],[0,1],[0,0]]]]},areaSquareMeters:100 })}>Nova subregião</button>
+    </section>
+  ),
+}));
+
 vi.mock('../lib/territoryService', () => ({
   generateSubdivisionDrafts: generateSubdivisionDraftsMock,
   loadActiveSubdivisionMemberships: loadActiveMembershipsMock,
   loadMyActiveSubdivisionMembership: loadMyMembershipMock,
+  loadMyActiveRegionMemberships: loadMyRegionMembershipsMock,
   loadVisibleRegionSet: loadVisibleRegionSetMock,
   publishRegionPartition: publishRegionPartitionMock,
   saveRegionPartition: saveRegionPartitionMock,
   saveSubdivisionEdits: saveSubdivisionEditsMock,
   setMySubdivisionMembership: setMyMembershipMock,
+  setMyRegionMemberships: setMyRegionMembershipsMock,
   validateRegionPartition: validateRegionPartitionMock,
 }));
 
@@ -175,6 +191,7 @@ const validBoundary = {
 };
 
 beforeEach(() => {
+  publishRegionPartitionMock.mockClear();
   fitBoundsMock.mockClear();
   mapOnMock.mockClear();
   mapOffMock.mockClear();
@@ -185,6 +202,8 @@ beforeEach(() => {
   loadVisibleRegionSetMock.mockResolvedValue(null);
   loadActiveMembershipsMock.mockResolvedValue([]);
   loadMyMembershipMock.mockResolvedValue(null);
+  loadMyRegionMembershipsMock.mockResolvedValue([]);
+  setMyRegionMembershipsMock.mockResolvedValue([]);
   setMyMembershipMock.mockResolvedValue({
     membershipId: '45678901-1234-4234-8234-123456789abc',
     subdivisionId: '34567890-1234-4234-8234-123456789abc',
@@ -297,6 +316,68 @@ describe('CityMap', () => {
     expect(screen.getByText('Subdivisões da Região 1: 2')).toBeTruthy();
   });
 
+  it('lets city leaders configure subdivisions in published default regions by name', async () => {
+    const regionGeometry: Geometry = {
+      type: 'MultiPolygon',
+      coordinates: [[[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]],
+    };
+    const regionSetId = '12345678-1234-4234-8234-123456789abc';
+    const regions = [
+      ['GT Unicesumar e região', '#0288D1'],
+      ['GT Monções e região', '#7CB342'],
+      ['GT ALVORADA MORANGUEIRA', '#F48FB1'],
+      ['GT UEM, Vila esperança e região', '#FFEA00'],
+    ].map(([name, color], index) => ({
+      id: `23456789-1234-4234-8234-123456789ab${index}`,
+      number: index + 1,
+      name,
+      color,
+      geometry: regionGeometry,
+      subdivisions: [],
+    }));
+    loadRoleMock.mockResolvedValueOnce('lider_cidade');
+    loadVisibleRegionSetMock.mockResolvedValueOnce({
+      regionSetId,
+      status: 'published',
+      publishedAt: '2026-10-12T12:00:00.000Z',
+      publishedRegionSetId: regionSetId,
+      targetRegionCount: 4,
+      isSystemDefault: true,
+      regions,
+    });
+    generateSubdivisionDraftsMock.mockResolvedValueOnce({
+      regionSetId,
+      regionId: regions[1].id,
+      targetSubdivisionCount: 5,
+      expectedAreaSquareMeters: 100,
+      coverageDifferenceSquareMeters: 0,
+      subdivisions: Array.from({ length: 5 }, (_, index) => ({
+        id: `34567890-1234-4234-8234-123456789ab${index}`,
+        number: index + 1,
+        geometry: {
+          type: 'MultiPolygon' as const,
+          coordinates: [[[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]],
+        },
+        areaSquareMeters: 100,
+        deviationPercent: 0,
+      })),
+    });
+
+    render(<CityMap />);
+
+    const regionSelect = await screen.findByRole('combobox', { name: 'Região do mapa' });
+    expect(Array.from((regionSelect as HTMLSelectElement).options).map((option) => option.textContent))
+      .toEqual(regions.map((region) => region.name));
+    fireEvent.change(regionSelect, { target: { value: '1' } });
+    expect(screen.getByRole('region',{name:'Subregiões de GT Monções e região'})).toBeTruthy();
+    expect(screen.queryByLabelText('Quantidade de regiões')).toBeNull();
+    expect(screen.queryByRole('button',{name:'Gerar subdivisões'})).toBeNull();
+    fireEvent.click(screen.getByRole('button',{name:'Nova subregião'}));
+    expect(await screen.findByText('Subdivisões da GT Monções e região: 1')).toBeTruthy();
+    expect(generateSubdivisionDraftsMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Editar vértices das subdivisões' })).toBeNull();
+  });
+
   it('lets participants enroll in a subdivision and switch while showing their current area', async () => {
     const regionGeometry: Geometry = {
       type: 'MultiPolygon',
@@ -339,6 +420,51 @@ describe('CityMap', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Trocar subdivisão' }));
     expect(await screen.findByText('Sua inscrição atual: Região 1, subdivisão 2.')).toBeTruthy();
     expect(setMyMembershipMock).toHaveBeenNthCalledWith(2, secondSubdivisionId);
+  });
+
+  it('lets participants enroll in multiple colored map divisions independently of their subdivision', async () => {
+    const regionGeometry: Geometry = {
+      type: 'MultiPolygon',
+      coordinates: [[[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]],
+    };
+    const regions = [
+      { id: '23456789-1234-4234-8234-123456789abc', name: 'GT UEM', color: '#FFEA00' },
+      { id: '34567890-1234-4234-8234-123456789abc', name: 'GT Monções', color: '#7CB342' },
+    ];
+    loadVisibleRegionSetMock.mockResolvedValueOnce({
+      regionSetId: '12345678-1234-4234-8234-123456789abc',
+      status: 'published',
+      publishedAt: '2026-10-12T12:00:00.000Z',
+      publishedRegionSetId: '12345678-1234-4234-8234-123456789abc',
+      targetRegionCount: 2,
+      regions: regions.map((region, index) => ({
+        ...region,
+        number: index + 1,
+        geometry: regionGeometry,
+        subdivisions: [{
+          id: `45678901-1234-4234-8234-123456789ab${index}`,
+          number: 1,
+          geometry: regionGeometry,
+        }],
+      })),
+    });
+    loadMyRegionMembershipsMock.mockResolvedValueOnce([regions[0].id]);
+    setMyRegionMembershipsMock.mockResolvedValueOnce(regions.map((region) => region.id));
+
+    render(<CityMap />);
+
+    expect(await screen.findByRole('heading', { name: 'Inscrição em divisões do mapa' })).toBeTruthy();
+    const firstDivision = screen.getByRole('checkbox', { name: 'GT UEM' }) as HTMLInputElement;
+    const secondDivision = screen.getByRole('checkbox', { name: 'GT Monções' }) as HTMLInputElement;
+    expect(firstDivision.checked).toBe(true);
+    expect(secondDivision.checked).toBe(false);
+    fireEvent.click(secondDivision);
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar inscrições nas divisões' }));
+
+    expect(await screen.findByText('Suas inscrições nas divisões foram atualizadas.')).toBeTruthy();
+    expect(setMyRegionMembershipsMock).toHaveBeenCalledWith(regions.map((region) => region.id));
+    expect(setMyMembershipMock).not.toHaveBeenCalled();
+    expect(screen.getByRole('heading', { name: 'Inscrição em subdivisão' })).toBeTruthy();
   });
 
   it('requires every active participant to select a destination before replacing the map', async () => {
@@ -403,31 +529,9 @@ describe('CityMap', () => {
     await screen.findByText(/PostGIS aprovou a pré-validação/);
     fireEvent.click(screen.getByRole('button', { name: 'Salvar rascunho' }));
     await screen.findByText(/Rascunho salvo.*não publicado/);
-    fireEvent.click(screen.getByRole('button', { name: 'Gerar subdivisões' }));
-    await screen.findByText('Subdivisões da Região 1: 5');
+    expect(screen.queryByRole('button', { name: 'Gerar subdivisões' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Publicar substituição' })).toBeNull();
-
-    fireEvent.change(screen.getByRole('combobox', { name: /Ana Participante/ }), {
-      target: { value: '34567890-1234-4234-8234-123456789ab0' },
-    });
-    fireEvent.change(screen.getByRole('combobox', { name: /Bruno Participante/ }), {
-      target: { value: '34567890-1234-4234-8234-123456789ab1' },
-    });
-    fireEvent.click(await screen.findByRole('button', { name: 'Publicar substituição' }));
-
-    await waitFor(() => expect(publishRegionPartitionMock).toHaveBeenCalledWith(
-      '12345678-1234-4234-8234-123456789abc',
-      [
-        {
-          membershipId: '45678901-1234-4234-8234-123456789abc',
-          subdivisionId: '34567890-1234-4234-8234-123456789ab0',
-        },
-        {
-          membershipId: '67890123-1234-4234-8234-123456789abc',
-          subdivisionId: '34567890-1234-4234-8234-123456789ab1',
-        },
-      ],
-    ));
+    expect(publishRegionPartitionMock).not.toHaveBeenCalled();
   });
 
   it('resumes a saved replacement draft with its membership list and destination IDs', async () => {
@@ -472,6 +576,32 @@ describe('CityMap', () => {
     expect(screen.queryByRole('button', { name: 'Preparar substituição' })).toBeNull();
   });
 
+  it('publishes a valid primary region without generated subdivisions and loads its canonical ID', async () => {
+    loadRoleMock.mockResolvedValueOnce('lider_cidade');
+    render(<CityMap />);
+    await screen.findByText(/Rascunhos locais: 0/);
+    const createHandler = mapOnMock.mock.calls.find(([event]) => event === 'pm:create')?.[1];
+    act(() => createHandler({ layer: {
+      setStyle: vi.fn(), remove: vi.fn(),
+      toGeoJSON: () => ({ type: 'Feature', properties: {}, geometry: validFeature.geometry }),
+    } }));
+    fireEvent.click(screen.getByRole('button', { name: 'Validar no PostGIS' }));
+    await screen.findByText(/PostGIS aprovou a pré-validação/);
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar rascunho' }));
+    await screen.findByText(/Rascunho salvo.*não publicado/);
+    loadVisibleRegionSetMock.mockResolvedValueOnce({
+      regionSetId: '12345678-1234-4234-8234-123456789abc', status: 'published',
+      publishedAt: '2026-10-12T12:00:00.000Z', publishedRegionSetId: '12345678-1234-4234-8234-123456789abc',
+      targetRegionCount: 1, isSystemDefault: false,
+      regions: [{ id: '23456789-1234-4234-8234-123456789abc', number: 1, name: null, color: '#123456',
+        geometry: { type: 'MultiPolygon', coordinates: [validFeature.geometry.coordinates] }, subdivisions: [] }],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Publicar mapa' }));
+    await screen.findByRole('button', { name: 'Nova subregião' });
+    expect(publishRegionPartitionMock).toHaveBeenCalledWith('12345678-1234-4234-8234-123456789abc');
+    expect(screen.getByRole('region', { name: 'Subregiões de Região 1' }).getAttribute('data-region-id')).toBe('23456789-1234-4234-8234-123456789abc');
+  });
+
   it('fits all legal polygons to the viewport after loading', async () => {
     render(<CityMap />);
 
@@ -483,17 +613,18 @@ describe('CityMap', () => {
     });
   });
 
-  it('re-fits the complete perimeter when the map container resizes', async () => {
-    const { unmount } = render(<CityMap />);
-
+  it('preserves the chosen viewport when the component rerenders', async () => {
+    const { rerender } = render(<CityMap />);
     await screen.findByTestId('leaflet-map');
-    const resizeHandler = mapOnMock.mock.calls.find(([eventName]) => eventName === 'resize')?.[1];
-    expect(resizeHandler).toBeTypeOf('function');
-    resizeHandler();
-    expect(fitBoundsMock).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(fitBoundsMock).toHaveBeenCalledOnce());
+    rerender(<CityMap />);
+    expect(fitBoundsMock).toHaveBeenCalledOnce();
+  });
 
-    unmount();
-    expect(mapOffMock).toHaveBeenCalledWith('resize', resizeHandler);
+  it('does not reset the viewport on map resize', async () => {
+    render(<CityMap />);
+    await screen.findByTestId('leaflet-map');
+    expect(mapOnMock.mock.calls.some(([eventName]) => eventName === 'resize')).toBe(false);
   });
 
   it('lets only city leaders create local region drafts without saving them', async () => {
@@ -615,64 +746,9 @@ describe('CityMap', () => {
     expect(await screen.findByText(/PostGIS aprovou a pré-validação/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Salvar rascunho' }));
     expect(await screen.findByText(/Rascunho salvo.*não publicado/)).toBeTruthy();
-    expect((screen.getByRole('spinbutton', { name: 'Subdivisões na região 2' }) as HTMLInputElement).value)
-      .toBe('5');
-    fireEvent.click(screen.getByRole('button', { name: 'Gerar subdivisões' }));
-    expect(await screen.findByText('Subdivisões da Região 2: 5')).toBeTruthy();
-    expect(generateSubdivisionDraftsMock).toHaveBeenCalledWith(
-      '12345678-1234-4234-8234-123456789abc',
-      2,
-      5,
-    );
-    expect(screen.getByTestId('subdivision-feature-count').textContent).toBe('5');
-    expect(screen.queryByRole('button', { name: 'Publicar mapa' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Editar vértices das subdivisões' })).toBeTruthy();
-    subdivisionLayerEnableMock.mockClear();
-    subdivisionLayerOnMock.mockClear();
-    fireEvent.click(screen.getByRole('button', { name: 'Editar vértices das subdivisões' }));
-    await waitFor(() => {
-      expect(subdivisionLayerEnableMock).toHaveBeenCalledWith({ allowSelfIntersection: false });
-    });
-    const editHandler = subdivisionLayerOnMock.mock.calls.find(([eventName]) => eventName === 'pm:edit')?.[1];
-    expect(editHandler).toBeTypeOf('function');
-    act(() => editHandler());
-    fireEvent.click(screen.getByRole('button', { name: 'Salvar edições' }));
-    await waitFor(() => expect(saveSubdivisionEditsMock).toHaveBeenCalled());
-    expect(await screen.findByRole('button', { name: 'Editar vértices das subdivisões' })).toBeTruthy();
-    expect(saveSubdivisionEditsMock).toHaveBeenCalledWith(
-      '23456789-1234-4234-8234-123456789abc',
-      expect.arrayContaining([expect.objectContaining({ number: 1, geometry: expect.objectContaining({ type: 'MultiPolygon' }) })]),
-    );
-    expect(screen.queryByRole('button', { name: 'Publicar mapa' })).toBeNull();
-    fireEvent.change(selectedRegion, { target: { value: '0' } });
-    const firstSubdivisionCount = screen.getByRole('spinbutton', { name: 'Subdivisões na região 1' });
-    expect((firstSubdivisionCount as HTMLInputElement).value).toBe('5');
-    fireEvent.change(firstSubdivisionCount, { target: { value: '3' } });
-    generateSubdivisionDraftsMock.mockResolvedValueOnce({
-      regionSetId: '12345678-1234-4234-8234-123456789abc',
-      regionId: '34567890-1234-4234-8234-123456789abc',
-      targetSubdivisionCount: 3,
-      expectedAreaSquareMeters: 100,
-      coverageDifferenceSquareMeters: 0,
-      subdivisions: Array.from({ length: 3 }, (_, index) => ({
-        id: `45678901-1234-4234-8234-123456789ab${index}`,
-        number: index + 1,
-        geometry: {
-          type: 'MultiPolygon' as const,
-          coordinates: [[[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]],
-        },
-        areaSquareMeters: 100,
-        deviationPercent: 0,
-      })),
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Gerar subdivisões' }));
-    expect(await screen.findByText('Subdivisões da Região 1: 3')).toBeTruthy();
-    fireEvent.change(selectedRegion, { target: { value: '1' } });
-    const publishButton = await screen.findByRole('button', { name: 'Publicar mapa' });
-    fireEvent.click(publishButton);
-    expect(await screen.findByText(/Mapa publicado para participantes/)).toBeTruthy();
-    expect(publishRegionPartitionMock).toHaveBeenCalledWith('12345678-1234-4234-8234-123456789abc');
-    expect(screen.queryByRole('button', { name: 'Publicar mapa' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Gerar subdivisões' })).toBeNull();
+    expect(screen.queryByRole('spinbutton', { name: 'Subdivisões na região 2' })).toBeNull();
+    expect(generateSubdivisionDraftsMock).not.toHaveBeenCalled();
     const [regions, targetCount] = validateRegionPartitionMock.mock.calls[0];
     expect(targetCount).toBe(2);
     expect(regions).toHaveLength(2);

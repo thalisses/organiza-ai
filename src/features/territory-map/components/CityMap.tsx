@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useState, type ComponentProps } from 'react';
+import { useEffect, useEffectEvent, useRef, useState, type ComponentProps } from 'react';
 import { geoJSON, Path, type Layer, type LatLngBounds } from 'leaflet';
 import type { Feature, FeatureCollection, Geometry, MultiPolygon, Polygon } from 'geojson';
 import { GeoJSON, MapContainer, TileLayer, useMap } from 'react-leaflet';
@@ -8,17 +8,20 @@ import boundaryUrl from '../../../data/maringa-urban-boundary.geojson?url';
 import { loadCurrentUserRole } from '../../identity-access/lib/roleManagementService';
 import { previewRegionDrafts } from '../lib/regionDraftValidation';
 import { getRegionColor } from '../lib/regionColors';
+import SubdivisionCutEditor from './SubdivisionCutEditor';
 import {
-  generateSubdivisionDrafts,
   loadActiveSubdivisionMemberships,
+  loadMyActiveRegionMemberships,
   loadMyActiveSubdivisionMembership,
   loadVisibleRegionSet,
   publishRegionPartition,
   saveRegionPartition,
   saveSubdivisionEdits,
+  setMyRegionMemberships,
   setMySubdivisionMembership,
   validateRegionPartition,
   type GeneratedSubdivision,
+  type ManualSubdivision,
   type ActiveSubdivisionMembership,
   type MembershipReassignment,
   type MyActiveSubdivisionMembership,
@@ -28,8 +31,8 @@ import {
 } from '../lib/territoryService';
 
 const boundaryStyle = {
-  color: '#174e3f',
-  fillColor: '#d8f05a',
+  color: 'var(--red-3)',
+  fillColor: 'var(--star)',
   fillOpacity: 0.2,
   weight: 3,
 };
@@ -60,6 +63,12 @@ export default function CityMap() {
   const [isSavingMyMembership, setIsSavingMyMembership] = useState(false);
   const [myMembershipError, setMyMembershipError] = useState('');
   const [myMembershipStatus, setMyMembershipStatus] = useState('');
+  const [savedRegionMembershipIds, setSavedRegionMembershipIds] = useState<string[]>([]);
+  const [selectedRegionMembershipIds, setSelectedRegionMembershipIds] = useState<string[]>([]);
+  const [isLoadingRegionMemberships, setIsLoadingRegionMemberships] = useState(false);
+  const [isSavingRegionMemberships, setIsSavingRegionMemberships] = useState(false);
+  const [regionMembershipError, setRegionMembershipError] = useState('');
+  const [regionMembershipStatus, setRegionMembershipStatus] = useState('');
   const [targetRegionCount, setTargetRegionCount] = useState(1);
   const [selectedRegionIndex, setSelectedRegionIndex] = useState(0);
   const [regionDraftGroups, setRegionDraftGroups] = useState<Polygon[][]>([]);
@@ -78,16 +87,15 @@ export default function CityMap() {
   const [isDraftDirty, setIsDraftDirty] = useState(false);
   const [isSavingDraft, setIsSavingDraft] = useState(false);
   const [saveDraftError, setSaveDraftError] = useState('');
-  const [subdivisionTargetCounts, setSubdivisionTargetCounts] = useState<Record<number, number>>({});
   const [generatedSubdivisions, setGeneratedSubdivisions] = useState<Record<number, SubdivisionGenerationResult>>({});
   const [dirtySubdivisionRegions, setDirtySubdivisionRegions] = useState<number[]>([]);
-  const [isGeneratingSubdivisions, setIsGeneratingSubdivisions] = useState(false);
-  const [subdivisionGenerationError, setSubdivisionGenerationError] = useState('');
   const [isEditingSubdivisionVertices, setIsEditingSubdivisionVertices] = useState(false);
   const [isSavingSubdivisionEdits, setIsSavingSubdivisionEdits] = useState(false);
   const [subdivisionEditError, setSubdivisionEditError] = useState('');
   const [isPublishingMap, setIsPublishingMap] = useState(false);
   const [publishError, setPublishError] = useState('');
+  const [manualCutsDirty, setManualCutsDirty] = useState(false);
+  const [cutControlsHost, setCutControlsHost] = useState<HTMLDivElement | null>(null);
 
   const hydrateVisibleRegionSet = useEffectEvent((regionSet: VisibleRegionSet) => {
     setVisibleRegionSet(regionSet);
@@ -97,10 +105,6 @@ export default function CityMap() {
     setTargetRegionCount(regionSet.targetRegionCount);
     setRegionDraftGroups(regionSet.regions.map((region) => toPolygonComponents(region.geometry)));
     setRegionColorOverrides(Object.fromEntries(regionSet.regions.map((region) => [region.number - 1, region.color])));
-    setSubdivisionTargetCounts(Object.fromEntries(regionSet.regions.map((region) => [
-      region.number - 1,
-      region.subdivisions.length || 5,
-    ])));
     setGeneratedSubdivisions(Object.fromEntries(regionSet.regions.map((region) => [
       region.number - 1,
       {
@@ -148,6 +152,25 @@ export default function CityMap() {
               .finally(() => {
                 if (!isCancelled) {
                   setIsLoadingMyMembership(false);
+                }
+              });
+
+            setIsLoadingRegionMemberships(true);
+            void loadMyActiveRegionMemberships()
+              .then((regionIds) => {
+                if (!isCancelled) {
+                  setSavedRegionMembershipIds(regionIds);
+                  setSelectedRegionMembershipIds(regionIds);
+                }
+              })
+              .catch(() => {
+                if (!isCancelled) {
+                  setRegionMembershipError('Não foi possível carregar suas inscrições nas divisões. Tente novamente.');
+                }
+              })
+              .finally(() => {
+                if (!isCancelled) {
+                  setIsLoadingRegionMemberships(false);
                 }
               });
           }
@@ -251,14 +274,11 @@ export default function CityMap() {
     : null;
   const selectedRegionColor = regionColorOverrides[selectedRegionIndex]
     ?? getRegionColor(selectedRegionIndex, targetRegionCount);
+  const hasUnsavedRegionMembershipChanges = savedRegionMembershipIds.length !== selectedRegionMembershipIds.length
+    || !selectedRegionMembershipIds.every((regionId) => savedRegionMembershipIds.includes(regionId));
   const selectedRegionSubdivisionResult = generatedSubdivisions[selectedRegionIndex] ?? null;
   const selectedRegionSubdivisions = selectedRegionSubdivisionResult?.subdivisions ?? [];
-  const selectedSubdivisionTargetCount = subdivisionTargetCounts[selectedRegionIndex] ?? 5;
   const selectedRegionHasUnsavedSubdivisionEdits = dirtySubdivisionRegions.includes(selectedRegionIndex);
-  const allSubdivisionDraftsReady = Array.from({ length: targetRegionCount }, (_, index) => (
-    generatedSubdivisions[index]?.subdivisions.length === (subdivisionTargetCounts[index] ?? 5)
-      && !dirtySubdivisionRegions.includes(index)
-  )).every(Boolean);
   const destinationSubdivisionIds = new Set(Object.values(generatedSubdivisions)
     .flatMap((result) => result.subdivisions.map((subdivision) => subdivision.id)));
   const allMembershipsRealigned = !isReplacementDraft || activeMemberships.every((membership) => (
@@ -269,17 +289,51 @@ export default function CityMap() {
     && (!publishedAt || isReplacementDraft)
     && !isDraftDirty
     && serverValidation?.passesValidation
-    && allSubdivisionDraftsReady
+    && dirtySubdivisionRegions.length === 0
     && allMembershipsRealigned
     && !isLoadingMemberships
     && !membershipLoadError,
   );
   const canEditDraft = canEditRegions && (publishedAt === null || isReplacementDraft);
+  const canConfigurePublishedDefault = Boolean(
+    canEditRegions
+    && !isReplacementDraft
+    && visibleRegionSet?.status === 'published'
+    && visibleRegionSet.isSystemDefault,
+  );
+  const manualCutsEnabled = canEditRegions && visibleRegionSet?.status === 'published' && !isReplacementDraft;
+  const selectedRegionName = visibleRegionSet?.regions[selectedRegionIndex]?.name
+    ?? `Região ${selectedRegionIndex + 1}`;
+  const manualCutRegionId = selectedRegionSubdivisionResult?.regionId
+    ?? visibleRegionSet?.regions[selectedRegionIndex]?.id;
+
+  function leaveManualCuts(): boolean {
+    if (manualCutsDirty && !window.confirm('Descartar os pontos e cortes locais desta região?')) return false;
+    setManualCutsDirty(false);
+    return true;
+  }
+
+  function handleManualSubdivisionCreated(subdivision: ManualSubdivision) {
+    setVisibleRegionSet((current) => current ? {
+      ...current,
+      regions: current.regions.map((region) => region.id === subdivision.regionId ? {
+        ...region, subdivisions: [...region.subdivisions.filter((area) => area.id !== subdivision.id), subdivision]
+          .sort((first, second) => first.number - second.number),
+      } : region),
+    } : current);
+    setGeneratedSubdivisions((current) => Object.fromEntries(Object.entries(current).map(([index, result]) => {
+      if (result.regionId !== subdivision.regionId) return [index, result];
+      const subdivisions = [...result.subdivisions.filter((area) => area.id !== subdivision.id), { ...subdivision, deviationPercent: 0 }]
+        .sort((first, second) => first.number - second.number);
+      return [index, { ...result, targetSubdivisionCount: subdivisions.length, subdivisions }];
+    })));
+  }
 
   async function prepareMapReplacement() {
     if (!visibleRegionSet?.publishedRegionSetId || !canEditRegions) {
       return;
     }
+    if (manualCutsEnabled && !leaveManualCuts()) return;
 
     setIsLoadingMemberships(true);
     setMembershipLoadError('');
@@ -299,36 +353,11 @@ export default function CityMap() {
       setServerValidationError('');
       setGeneratedSubdivisions({});
       setDirtySubdivisionRegions([]);
-      setSubdivisionTargetCounts({});
       setIsDraftDirty(true);
     } catch {
       setMembershipLoadError('Não foi possível carregar as inscrições ativas para realinhamento. Tente novamente.');
     } finally {
       setIsLoadingMemberships(false);
-    }
-  }
-
-  async function generateSelectedRegionSubdivisions() {
-    if (!savedDraftId || isDraftDirty) {
-      return;
-    }
-
-    setIsGeneratingSubdivisions(true);
-    setSubdivisionGenerationError('');
-    setIsEditingSubdivisionVertices(false);
-
-    try {
-      const result = await generateSubdivisionDrafts(
-        savedDraftId,
-        selectedRegionIndex + 1,
-        selectedSubdivisionTargetCount,
-      );
-      setGeneratedSubdivisions((current) => ({ ...current, [selectedRegionIndex]: result }));
-      setDirtySubdivisionRegions((current) => current.filter((index) => index !== selectedRegionIndex));
-    } catch {
-      setSubdivisionGenerationError('Não foi possível gerar as subdivisões no servidor. Tente novamente.');
-    } finally {
-      setIsGeneratingSubdivisions(false);
     }
   }
 
@@ -354,30 +383,18 @@ export default function CityMap() {
       setSavedDraftId(null);
       setMembershipReassignments({});
       setActiveMemberships([]);
-      setVisibleRegionSet({
-        regionSetId: savedDraftId,
-        status: 'published',
-        publishedAt: result.publishedAt,
-        publishedRegionSetId: savedDraftId,
-        targetRegionCount,
-        regions: regionDraftGeometries.map((geometry, index) => {
-          const resultForRegion = generatedSubdivisions[index];
-          return {
-            id: resultForRegion.regionId,
-            number: index + 1,
-            color: regionColorOverrides[index] ?? getRegionColor(index, targetRegionCount),
-            geometry: geometry.type === 'MultiPolygon'
-              ? geometry
-              : { type: 'MultiPolygon', coordinates: [geometry.coordinates] },
-            subdivisions: resultForRegion.subdivisions.map((subdivision) => ({
-              id: subdivision.id,
-              number: subdivision.number,
-              geometry: subdivision.geometry,
-            })),
-          };
-        }),
-      });
       setIsDraftDirty(false);
+      try {
+        const regionSet = await loadVisibleRegionSet();
+        if (!regionSet || regionSet.regionSetId !== result.regionSetId || regionSet.status !== 'published') {
+          throw new Error('Published map could not be reloaded.');
+        }
+        setVisibleRegionSet(regionSet);
+        setVisibleRegionSetError('');
+      } catch {
+        setVisibleRegionSet(null);
+        setVisibleRegionSetError('Mapa publicado, mas não foi possível atualizar a visualização. Recarregue a página.');
+      }
     } catch {
       setPublishError('Não foi possível publicar o mapa. Confira a validação e se já existe um mapa publicado.');
     } finally {
@@ -418,6 +435,28 @@ export default function CityMap() {
       setMyMembershipError('Não foi possível salvar sua inscrição na subdivisão. Tente novamente.');
     } finally {
       setIsSavingMyMembership(false);
+    }
+  }
+
+  async function saveMyRegionMemberships() {
+    if (!visibleRegionSet || visibleRegionSet.status !== 'published'
+      || isLoadingRegionMemberships || isSavingRegionMemberships || regionMembershipError
+      || selectedRegionMembershipIds.some((regionId) => !visibleRegionSet.regions.some((region) => region.id === regionId))) {
+      return;
+    }
+
+    setIsSavingRegionMemberships(true);
+    setRegionMembershipError('');
+    setRegionMembershipStatus('');
+    try {
+      const regionIds = await setMyRegionMemberships(selectedRegionMembershipIds);
+      setSavedRegionMembershipIds(regionIds);
+      setSelectedRegionMembershipIds(regionIds);
+      setRegionMembershipStatus('Suas inscrições nas divisões foram atualizadas.');
+    } catch {
+      setRegionMembershipError('Não foi possível salvar suas inscrições nas divisões. Tente novamente.');
+    } finally {
+      setIsSavingRegionMemberships(false);
     }
   }
 
@@ -507,9 +546,9 @@ export default function CityMap() {
             onChange={(event) => {
               const nextCount = Number(event.target.value);
               if (Number.isInteger(nextCount) && nextCount >= 1 && nextCount <= maximumRegionCount) {
+                if (manualCutsEnabled && !leaveManualCuts()) return;
                 setTargetRegionCount(nextCount);
                 setSelectedRegionIndex((currentIndex) => Math.min(currentIndex, nextCount - 1));
-                setSubdivisionTargetCounts({});
                 setGeneratedSubdivisions({});
                 setDirtySubdivisionRegions([]);
                 setServerValidation(null);
@@ -524,6 +563,7 @@ export default function CityMap() {
           <select
             id="selected-region-index"
             onChange={(event) => {
+              if (manualCutsEnabled && !leaveManualCuts()) return;
               setSelectedRegionIndex(Number(event.target.value));
               setIsEditingSubdivisionVertices(false);
             }}
@@ -581,35 +621,8 @@ export default function CityMap() {
           >
             Limpar rascunhos
           </button>
-          {savedDraftId && (
+          {canPublishMap && (
             <>
-              <label htmlFor={`subdivision-target-count-${selectedRegionIndex}`}>
-                Subdivisões na região {selectedRegionIndex + 1}
-              </label>
-              <input
-                id={`subdivision-target-count-${selectedRegionIndex}`}
-                max={maximumRegionCount}
-                min={1}
-                onChange={(event) => {
-                  const nextCount = Number(event.target.value);
-                  if (Number.isInteger(nextCount) && nextCount >= 1 && nextCount <= maximumRegionCount) {
-                    setSubdivisionTargetCounts((currentCounts) => ({
-                      ...currentCounts,
-                      [selectedRegionIndex]: nextCount,
-                    }));
-                  }
-                }}
-                type="number"
-                value={selectedSubdivisionTargetCount}
-              />
-              <button
-                className="city-map-validate-button"
-                disabled={isDraftDirty || isGeneratingSubdivisions || isSavingDraft}
-                onClick={() => void generateSelectedRegionSubdivisions()}
-                type="button"
-              >
-                {isGeneratingSubdivisions ? 'Gerando…' : 'Gerar subdivisões'}
-              </button>
               {canPublishMap && (
                 <button
                   className="city-map-validate-button"
@@ -635,13 +648,16 @@ export default function CityMap() {
           <select
             id="visible-region-index"
             onChange={(event) => {
+              if (manualCutsEnabled && !leaveManualCuts()) return;
               setSelectedRegionIndex(Number(event.target.value));
               setSelectedSubdivisionId('');
             }}
             value={selectedRegionIndex}
           >
             {visibleRegionSet?.regions.map((region) => (
-              <option key={region.id} value={region.number - 1}>Região {region.number}</option>
+              <option key={region.id} value={region.number - 1}>
+                {region.name ?? `Região ${region.number}`}
+              </option>
             ))}
           </select>
           {canEditRegions && visibleRegionSet?.publishedRegionSetId && (
@@ -657,6 +673,7 @@ export default function CityMap() {
         </div>
       )}
 
+      <div ref={setCutControlsHost} />
       <div className="city-map-frame" role="region" aria-label="Mapa urbano principal de Maringá">
         {boundaryError ? (
           <p className="city-map-error" role="alert">{boundaryError}</p>
@@ -683,12 +700,12 @@ export default function CityMap() {
                 style={(feature) => {
                   const color = typeof feature?.properties?.color === 'string'
                     ? feature.properties.color
-                    : '#174e3f';
+                    : 'var(--red-3)';
                   return { color, fillColor: color, fillOpacity: 0.18, weight: 2 };
                 }}
               />
             )}
-            {selectedRegionSubdivisions.length > 0 && (
+            {selectedRegionSubdivisions.length > 0 && !manualCutsEnabled && (
               <GeoJSON
                 data={subdivisionFeatureCollection(selectedRegionSubdivisions)}
                 key={`subdivisions-${selectedRegionIndex}-${isEditingSubdivisionVertices}`}
@@ -704,7 +721,7 @@ export default function CityMap() {
                     direction: 'center',
                     className: 'subdivision-number-tooltip',
                   });
-                  if (isEditingSubdivisionVertices && publishedAt === null) {
+                  if (isEditingSubdivisionVertices && (publishedAt === null || canConfigurePublishedDefault)) {
                     editableLayer.pm.enable({ allowSelfIntersection: false });
                     editableLayer.on('pm:edit', () => {
                       const editedGeometry = editableLayer.toGeoJSON(15).geometry;
@@ -741,7 +758,13 @@ export default function CityMap() {
               />
             )}
             <FitBoundaryBounds bounds={boundaryBounds} />
-            {canEditDraft && (
+            {manualCutsEnabled && manualCutRegionId && (
+              <SubdivisionCutEditor key={manualCutRegionId} regionId={manualCutRegionId}
+                regionName={selectedRegionName} regionGeometry={regionDraftGeometries[selectedRegionIndex]} color={selectedRegionColor}
+                initialSubdivisions={selectedRegionSubdivisions}
+                portalHost={cutControlsHost} onDirtyChange={setManualCutsDirty} onCreated={handleManualSubdivisionCreated} />
+            )}
+            {canEditDraft && !manualCutsEnabled && (
               <RegionDraftTools
                 regionColor={selectedRegionColor}
                 onDraftCreated={(geometry, layer) => {
@@ -805,9 +828,6 @@ export default function CityMap() {
       )}
       {saveDraftError && (
         <p className="city-map-error" role="alert">{saveDraftError}</p>
-      )}
-      {subdivisionGenerationError && (
-        <p className="city-map-error" role="alert">{subdivisionGenerationError}</p>
       )}
       {subdivisionEditError && (
         <p className="city-map-error" role="alert">{subdivisionEditError}</p>
@@ -900,10 +920,54 @@ export default function CityMap() {
           {myMembershipStatus && <p className="city-map-server-validation" role="status">{myMembershipStatus}</p>}
         </section>
       )}
+      {canEnrollInSubdivisions && visibleRegionSet?.status === 'published' && visibleRegionSet.regions.length > 0 && (
+        <section className="city-map-membership city-map-region-membership" aria-labelledby="region-membership-title">
+          <h3 id="region-membership-title">Inscrição em divisões do mapa</h3>
+          {isLoadingRegionMemberships ? (
+            <p role="status">Carregando suas inscrições nas divisões…</p>
+          ) : (
+            <fieldset className="city-map-region-membership-options">
+              <legend>Divisões disponíveis</legend>
+              {visibleRegionSet.regions.map((region) => (
+                <label className="city-map-region-membership-option" key={region.id}>
+                  <input
+                    checked={selectedRegionMembershipIds.includes(region.id)}
+                    disabled={isSavingRegionMemberships || Boolean(regionMembershipError)}
+                    onChange={() => {
+                      setSelectedRegionMembershipIds((current) => current.includes(region.id)
+                        ? current.filter((regionId) => regionId !== region.id)
+                        : [...current, region.id]);
+                      setRegionMembershipStatus('');
+                    }}
+                    type="checkbox"
+                  />
+                  <span
+                    aria-hidden="true"
+                    className="city-map-region-swatch"
+                    style={{ backgroundColor: region.color }}
+                  />
+                  <span>{region.name ?? `Região ${region.number}`}</span>
+                </label>
+              ))}
+            </fieldset>
+          )}
+          <button
+            className="city-map-validate-button"
+            disabled={isLoadingRegionMemberships || isSavingRegionMemberships || Boolean(regionMembershipError)
+              || !hasUnsavedRegionMembershipChanges}
+            onClick={() => void saveMyRegionMemberships()}
+            type="button"
+          >
+            {isSavingRegionMemberships ? 'Salvando…' : 'Salvar inscrições nas divisões'}
+          </button>
+          {regionMembershipError && <p className="city-map-error" role="alert">{regionMembershipError}</p>}
+          {regionMembershipStatus && <p className="city-map-server-validation" role="status">{regionMembershipStatus}</p>}
+        </section>
+      )}
       {selectedRegionSubdivisions.length > 0 && (
         <p className="city-map-subdivision-status" role="status">
-          Subdivisões da Região {selectedRegionIndex + 1}: {selectedRegionSubdivisions.length}
-          {publishedAt === null && (
+          Subdivisões da {selectedRegionName}: {selectedRegionSubdivisions.length}
+          {!manualCutsEnabled && (publishedAt === null || canConfigurePublishedDefault) && canEditRegions && (
             <button
               className="city-map-clear-button"
               onClick={() => setIsEditingSubdivisionVertices((enabled) => !enabled)}
@@ -912,7 +976,8 @@ export default function CityMap() {
               {isEditingSubdivisionVertices ? 'Concluir edição' : 'Editar vértices das subdivisões'}
             </button>
           )}
-          {publishedAt === null && selectedRegionHasUnsavedSubdivisionEdits && (
+          {!manualCutsEnabled && (publishedAt === null || canConfigurePublishedDefault)
+            && selectedRegionHasUnsavedSubdivisionEdits && (
             <button
               className="city-map-validate-button"
               disabled={isSavingSubdivisionEdits}
@@ -1023,7 +1088,7 @@ function visibleRegionFeatureCollection(regionSet: VisibleRegionSet): FeatureCol
     type: 'FeatureCollection',
     features: regionSet.regions.map((region) => ({
       type: 'Feature',
-      properties: { region_number: region.number, color: region.color },
+      properties: { region_number: region.number, name: region.name, color: region.color },
       geometry: region.geometry,
     })),
   };
@@ -1119,17 +1184,12 @@ function validateBoundary(value: unknown): ComponentProps<typeof GeoJSON>['data'
 
 function FitBoundaryBounds({ bounds }: { bounds: LatLngBounds }) {
   const map = useMap();
+  const fittedBounds = useRef<LatLngBounds | null>(null);
 
   useEffect(() => {
-    function fitBoundary() {
-      map.fitBounds(bounds, { padding: [28, 28], maxZoom: 11 });
-    }
-
-    fitBoundary();
-    map.on('resize', fitBoundary);
-    return () => {
-      map.off('resize', fitBoundary);
-    };
+    if (fittedBounds.current?.equals(bounds)) return;
+    map.fitBounds(bounds, { padding: [28, 28], maxZoom: 11 });
+    fittedBounds.current = bounds;
   }, [bounds, map]);
 
   return null;

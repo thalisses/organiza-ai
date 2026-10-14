@@ -1,5 +1,215 @@
 # Task List: Organiza AI MVP
 
+## Revisão MN: Cadastro Manual Individual
+
+**Status:** especificação e plano aprovados pelo usuário; MN01–MN06 implementadas e verificadas localmente até 2026-10-14. Nove subdivisões automáticas removidas na limpeza autorizada, com as quatro regiões principais preservadas. Gates finais: 133 testes frontend, 417 verificações de banco, 4 jornadas E2E, build e lint passam. Não houve deploy remoto, reset ou commit. Pendências dos outros módulos permanecem intactas.
+
+### MN01: Inventariar áreas e fechar contrato
+
+**Descrição:** conferir registros e referências atuais com consultas somente leitura, classificar a origem sem presunções e definir o contrato de criação/idempotência.
+**Aceite:**
+- [x] Inventário identificou nove áreas que coincidiam com o gerador anterior; inscrições, histórico de realinhamento e atos estavam vazios antes da limpeza. Origem explícita foi adicionada, sem classificar desconhecidas por presunção.
+- [x] RPC `create_manual_subdivision` e campos de origem/chave/autor/hash garantem criação canônica, retry protegido e numeração sob lock.
+- [x] Limpeza conservadora interrompe diante de origem/referência incompatível; preservação de manuais e regiões tem cobertura de banco.
+**Verificação:** consultas locais somente leitura; conferir migrations e documentação oficial; registrar evidências sem dados pessoais/credenciais.
+**Dependências:** aprovação deste plano/tarefas.
+**Arquivos prováveis:** `tasks/plan.md`, `SPEC-territory-map.md` apenas se necessário esclarecer contrato.
+**Escopo:** pequeno, até 2 arquivos.
+
+### MN02: Criar uma subdivisão manual no banco
+
+**Descrição:** implementar RPC e serviço tipado que validam/recortam um polígono e inserem uma única área disponível no mapa vigente.
+**Aceite:**
+- [x] Somente liderança autorizada insere; sobreposição, áreas desiguais e cobertura parcial são aceitas, e recorte inválido/vazio falha atomicamente.
+- [x] ID/número/geometria canônicos são retornados; retries iguais não duplicam, chave reutilizada com outra entrada falha; duas chamadas concorrentes com a mesma chave retornam o mesmo ID.
+- [x] Inserção preserva regiões, mapa, inscrições e áreas anteriores; nenhuma gravação exige rascunho/publicação separados.
+**Verificação:** `npm run test:db`; `npm run test -- --run src/features/territory-map/lib/territoryService.test.ts`; `npm run typecheck`.
+**Dependências:** MN01.
+**Arquivos prováveis:** migração nova, teste SQL focado, `territoryService.ts`, `territoryService.test.ts`.
+**Escopo:** médio, até 4 arquivos.
+
+### MN03: Concluir o desenho com salvamento imediato
+
+**Descrição:** conectar o editor à criação individual, mantendo pontos/zoom, exibição temporária e resposta canônica sem replay de toda a partição.
+**Aceite:**
+- [x] Concluir a primeira área grava e mostra o resultado; a segunda preserva a primeira e pode se sobrepor.
+- [x] Estado pendente impede duplo envio; falha mantém pontos/chave para retry e não anuncia sucesso; cancelar/remove ponto atua só antes da gravação.
+- [x] Reload lê registros salvos; troca de região preserva os limites do cadastro; cancelar não exclui área salva.
+**Verificação:** `npm run test -- --run src/features/territory-map`; `npm run build`; navegador local com cadastro em fixture descartável.
+**Dependências:** MN02.
+**Arquivos prováveis:** `SubdivisionCutEditor.tsx`, `SubdivisionCutEditor.test.tsx`, `CityMap.tsx`, `CityMap.test.tsx`, `src/styles.css` somente se necessário.
+**Escopo:** médio, até 5 arquivos.
+
+### Checkpoint MN: Cadastro Individual
+- [x] Primeira e segunda área salvas/disponíveis após commit da transação e reload; sobreposição e cobertura parcial funcionam.
+- [x] Falhas/retries/concorrência/autorização testados, sem alteração das regiões principais.
+
+### MN04: Retirar geração e limpar áreas automáticas
+
+**Descrição:** executar a limpeza idempotente baseada no inventário e impedir recriação por todos os endpoints acessíveis; remover os controles de geração de subdivisões.
+**Aceite:**
+- [x] Removidas nove áreas automáticas de todas as regiões; regiões principais preservadas, e preservação de manuais verificada em fixtures.
+- [x] Referências inesperadas interrompem a limpeza sem exclusão parcial/cascata; repetição da operação não remove novos cadastros manuais.
+- [x] UI e chamadas diretas deixam de gerar subdivisões automaticamente; geração de regiões principais e bootstrap idempotente preservados.
+**Verificação:** `npm run test:db`; `npm run test -- --run src/features/territory-map/components/CityMap.test.tsx`; `npm run build`; conferência de contagens/IDs antes e depois.
+**Dependências:** MN01 e checkpoint MN de cadastro individual; limpeza só quando novo cadastro estiver verificado.
+**Arquivos prováveis:** migração nova, teste SQL focado, `CityMap.tsx`, `CityMap.test.tsx`, `territoryService.ts`.
+**Escopo:** médio, até 5 arquivos.
+
+### MN05: Verificar leitura, inscrição e acessibilidade
+
+**Descrição:** conferir contratos de leitura com zero/uma/várias áreas e numeração após limpeza; garantir disponibilidade para participantes e controles acessíveis.
+**Aceite:**
+- [x] Participante lê e se inscreve na área manual pelo ID; uma inscrição ativa continua obrigatória (banco e E2E).
+- [x] Leitores aceitam regiões vazias e números válidos com lacunas; publicação de região principal sem subáreas tem regressões SQL e UI.
+- [x] Mouse, teclado e toque emulado verificados; capturas e limites do editor em desktop/mobile conferidos. Cadastro disponível sem restrição DEV. Teste com dispositivo físico/leitor de tela não executado.
+**Verificação:** `npm run test -- --run src/features/territory-map`; `npm run test:db`; `npm run build`; `npm run lint`; navegador com screenshots e inspeção de console.
+**Dependências:** MN04.
+**Arquivos prováveis:** `territoryService.ts`, `territoryService.test.ts`, `CityMap.tsx`, `CityMap.test.tsx`, `src/styles.css` se necessário. Se uma regra de banco adicional aparecer, tratar em fatia própria sem exceder 5 arquivos.
+**Escopo:** médio, até 5 arquivos.
+
+### Checkpoint MN: Manual Exclusivo
+- [x] Consulta local final confirmou quatro regiões publicadas e zero subdivisões automáticas/desconhecidas; fixtures manuais foram limpas após testes.
+- [x] Fluxo disponível fora de DEV, com criação, limpeza e gates verificados.
+
+### MN06: Jornadas E2E e documentação final
+
+**Descrição:** automatizar cadastro individual e inscrição imediata com fixtures descartáveis; registrar verificações e limites reais.
+**Aceite:**
+- [x] Jornadas de liderança/participante cobrem cadastro, disponibilidade, inscrição e reload; áreas sobrepostas e IDs preservados.
+- [x] Limpeza idempotente, bloqueio da geração, rejeição geométrica e permissões têm cobertura; cancelar não exclui área já salva.
+- [x] Gates completos passaram; mouse/teclado/toque emulado e layout do editor verificados. Overflow global de blocos existentes fora do mapa permanece documentado, sem enfraquecer verificações do editor.
+**Verificação:** `npm run test -- --run`; `npm run build`; `npm run lint`; `npm run test:db`; `npm run test:e2e`; navegador real.
+**Dependências:** MN05 e checkpoint manual exclusivo.
+**Arquivos prováveis:** E2E territorial existente ou arquivo focado se necessário, `SPEC-territory-map.md`, `tasks/plan.md`, `tasks/todo.md`.
+**Escopo:** médio, até 4 arquivos.
+
+### Checkpoint MN: Aceite
+- [x] Critérios funcionais da revisão verificados; advisor local de segurança sem erros e histórico local de migrações sincronizado.
+- [x] Nenhum reset, deploy, commit ou exclusão fora do inventário autorizado.
+
+<details>
+<summary>Histórico SC: tarefas da prévia (SC04–SC07 substituídas, não concluídas)</summary>
+
+## Histórico SC: Cortes Manuais de Subdivisões
+
+**Status:** plano e tarefas aprovados em 2026-10-13. Política de atos confirmada; SC01 e SC02 concluídas, SC03 entregue como prévia de desenvolvimento. Checkpoint de prévia aguarda revisão antes de SC04; SC04–SC07 não iniciadas. Complementam T08/T09/T10 sem encerrar ou sobrescrever pendências do MVP.
+
+### SC01: Provar cortes e fechar contratos
+
+**Descrição:** validar a viabilidade de uma linha separar GT UEM e áreas sintéticas em exatamente duas partes usando PostGIS; conferir a coleta de linhas no Geoman instalado e inventariar referências às subdivisões. Não alterar dados publicados.
+
+**Aceite:**
+- [x] Corte reto/com segmentos e cortes sucessivos preservam cobertura; cortes inválidos, buracos e multipartes têm resultados definidos (18 testes pgTAP passam).
+- [x] Contratos de prévia, rascunho, tokens e publicação descrevem autorização, limites e erros; snap visual de 20 px e teto independente de 1 metro no servidor, com teste negativo.
+- [x] Política de retenção de IDs/histórico e vínculos de atos é apresentada para revisão; bloqueio de publicação com atos aprovado pelo usuário, sem remoção ou movimentação automática.
+
+**Verificação:** `supabase test db --local supabase/tests/territory_subdivision_cut_feasibility.test_test.sql` passou com 18 testes e rollback. Documentação oficial e tipos instalados conferidos. Nenhuma RPC ou UI de corte implementada ainda.
+**Dependências:** aprovação do plano e tarefas.
+**Arquivos prováveis:** `tasks/plan.md`, `SPEC-territory-map.md`, teste espacial em `supabase/tests/` se houver prova reutilizável.
+**Escopo:** pequeno, até 3 arquivos.
+
+### SC02: Prévia validada no servidor
+
+**Descrição:** adicionar operação sem escrita que calcula o corte e um serviço tipado que verifica sua resposta, sem depender da função existente de edição de vértices.
+
+**Aceite:**
+- [x] Liderança recebe duas áreas válidas com métricas; papel não autorizado e entrada adulterada são rejeitados.
+- [x] Erro não altera a base; extremos são ajustados somente pela regra acordada e resultados fora da região são negados.
+- [x] Contrato distingue ID persistido e referência temporária; limites de 50 áreas/entrada/vértices são efetivos.
+
+**Verificação:** `npm run test:db`; `npm run test -- --run src/features/territory-map/lib/territoryService.test.ts`; `npm run typecheck`.
+**Dependências:** SC01 e revisão de seus contratos.
+**Arquivos prováveis:** nova migração gerada pelo CLI, teste SQL, `territoryService.ts`, `territoryService.test.ts`.
+**Escopo:** médio, até 4 arquivos.
+
+### SC03: Desenhar e desfazer na região selecionada
+
+**Descrição:** conectar a prévia aos controles da região selecionada; coletar pontos, concluir, remover ponto, cancelar e desfazer, mantendo edição local separada do mapa publicado.
+
+**Aceite:**
+- [x] GT UEM sem subdivisões e uma subdivisão automática aceitam cortes por pontos; três cortes podem resultar em quatro áreas (prova e RPC; navegador testou cortar base automática existente).
+- [x] Área-alvo e resultados são claros; desfazer restaura a prévia anterior; navegação do mapa não desenha cortes acidentalmente (captura por cliques coberta em componente; verificação real de mouse/toque permanece em SC06/SC07).
+- [x] Áreas desiguais são aceitas e métricas são informativas; nenhuma chamada de salvar/publicar ocorre apenas ao concluir o corte.
+
+**Verificação:** `npm run test -- --run src/features/territory-map/components/CityMap.test.tsx`; `npm run build`; inspeção do navegador desktop.
+**Dependências:** SC02.
+**Arquivos prováveis:** `CityMap.tsx`, `CityMap.test.tsx`, componente de coleta de linhas e seu teste somente se necessário, `src/styles.css`.
+**Escopo:** médio, até 5 arquivos.
+
+### Checkpoint SC: Prévia
+- [x] Nova regra aprovada: área manual fechada pode sobrepor subáreas existentes; resultado é recortado pela região selecionada. Contorno de 18 pontos concluído e desfeito no navegador sem escrita.
+- [x] Corte e desfazer funcionam; banco/mapa vigente/inscrições não são alterados.
+- [x] Atualização de escopo: corte inicial da região inteira pode substituir as áreas automáticas após confirmação; cruzamento das bordas internas e restauração por desfazer verificados no banco e no navegador.
+- [ ] Rever contratos, tolerâncias e referências antes de começar o armazenamento.
+- [x] Gates desta fatia: 121 testes frontend, 382 testes de banco, build e lint passaram. E2E de persistência/publicação e testes reais de mouse/toque/mobile continuam pendentes.
+
+### SC04: Salvar e retomar rascunho regional
+
+**Descrição:** guardar a partição manual em rascunho privado, comprovando a sequência de cortes, e permitir retomar após recarregar, sem publicação implícita.
+
+**Aceite:**
+- [ ] Salvar/recarregar restaura geometrias e IDs canônicos; o participante continua vendo a configuração publicada anterior.
+- [ ] Replay valida a origem manual; áreas desiguais são aceitas; token obsoleto e entrada inválida falham atomicamente.
+- [ ] Erro mantém desenho local e estado persistido; outras regiões e áreas não cortadas são preservadas.
+
+**Verificação:** `npm run test:db`; `npm run test -- --run src/features/territory-map`; `npm run build`.
+**Dependências:** SC03 e checkpoint de prévia.
+**Arquivos prováveis:** migração, teste SQL, `territoryService.ts`, `territoryService.test.ts`, `CityMap.tsx`.
+**Escopo:** médio, até 5 arquivos; testes UI adicionais usam a etapa SC06.
+
+### SC05: Publicar sem perder inscrições ou referências
+
+**Descrição:** promover o rascunho em ação explícita e transacional, com validação espacial, origem manual e destinos explícitos para inscrições afetadas, respeitando as decisões de SC01.
+
+**Aceite:**
+- [ ] Publicação manual permite desigualdade sem relaxar geração automática; região KML mantém contorno e demais áreas/IDs.
+- [ ] Omissão de destinos, referência não tratada, conflito ou falha mantém mapa, inscrições e histórico anteriores; nunca excluir vínculos de atos silenciosamente.
+- [ ] Somente liderança da cidade publica; cliente usa resultado canônico e não anuncia sucesso antes de confirmação.
+
+**Verificação:** `npm run test:db`; `npm run test -- --run src/features/territory-map/lib/territoryService.test.ts`; `npm run build`.
+**Dependências:** SC04 e aprovação de eventual regra adicional de referências em SC01.
+**Arquivos prováveis:** migração, teste SQL, `territoryService.ts`, `territoryService.test.ts`, `CityMap.tsx`.
+**Escopo:** médio, até 5 arquivos.
+
+### Checkpoint SC: Persistência
+- [ ] Salvar não publica; publicação/reload e realocação funcionam com rollback e conflitos testados.
+- [ ] Fluxos automáticos e edição de vértices existentes continuam passando.
+
+### SC06: Acessibilidade e regressões da interface
+
+**Descrição:** concluir teclado, toque, foco, mensagens e proteção contra descarte/substituição, cobrindo o fluxo salvo/publicado nos testes de componentes existentes.
+
+**Aceite:**
+- [ ] Controles e meio equivalente de definir pontos são acessíveis por teclado e toque; interface não depende só de cor.
+- [ ] Troca de região/modo e geração sobre trabalho existente não descartam edições sem confirmação.
+- [ ] Quantidade manual, carregamento, bloqueios e erros não usam as premissas de quantidade fixa da geração automática.
+
+**Verificação:** `npm run test -- --run src/features/territory-map`; `npm run lint`; `npm run build`; navegador desktop/mobile com screenshots e inspeção de console.
+**Dependências:** SC05.
+**Arquivos prováveis:** `CityMap.tsx`, `CityMap.test.tsx`, componente de coleta e seu teste se criados, `src/styles.css`.
+**Escopo:** médio, até 5 arquivos.
+
+### SC07: Jornadas E2E e aceite final
+
+**Descrição:** verificar jornadas reais de liderança/participante com fixtures descartáveis e atualizar documentação do que foi efetivamente comprovado.
+
+**Aceite:**
+- [ ] Desenhar três cortes, desfazer, salvar, recarregar e publicar em GT UEM funciona; áreas desiguais persistem.
+- [ ] Corte sobre base automática, rejeição de corte inválido, permissões e realocação têm cobertura; mapa publicado não muda durante a prévia/salvamento.
+- [ ] Gates gerais passam ou bloqueios são registrados sem apagar testes; controles e tiles renderizam em desktop/mobile.
+
+**Verificação:** `npm run test -- --run`; `npm run build`; `npm run lint`; `npm run test:db`; `npm run test:e2e`; navegador real.
+**Dependências:** SC06 e checkpoint de persistência.
+**Arquivos prováveis:** teste E2E territorial existente ou novo arquivo focado se necessário, `SPEC-territory-map.md`, `tasks/plan.md`, `tasks/todo.md`.
+**Escopo:** médio, até 4 arquivos.
+
+### Checkpoint SC: Concluído
+- [ ] Critérios da extensão aprovados e verificados; revisões de segurança e regressão registradas.
+- [ ] Dados existentes preservados; nenhum reset, deploy, commit ou dependência nova sem autorização correspondente.
+
+</details>
+
 ## Task T01: Obtain and validate the urban-perimeter geometry (in progress; official seven-polygon layer selected)
 
 **Description:** Obtain Maringá's current legal urban-perimeter polygon from the Prefeitura, convert only with an approved source/CRS, and document attribution and CRS. Do not substitute the IBGE municipal perimeter. If the official polygon cannot be obtained or validated, stop the territory-dependent tasks and request a decision.
@@ -259,7 +469,9 @@
 
 ## Task T08: Generate and preview balanced partitions
 
-**Description:** Let city leadership draw and save validated region drafts, generate area-balanced subdivisions automatically inside each region, and edit generated vertices before saving validated subdivision drafts.
+**Description:** Let city leadership draw/save validated primary region drafts and publish/replace those maps. Subdivisions now follow manual individual creation with immediate availability in MN01–MN06.
+
+**Scope revision (2026-10-13):** The automatic subdivision generation, area-balance and separate draft/publication portions below record earlier implementation evidence only; they are superseded by the approved manual flow and must not be resumed as current requirements. Preserve completed checks as history; apply existing partition/realignment rules only where still required for primary region maps. Outstanding manual-subdivision work is tracked in MN01–MN06.
 
 **Status note (2026-10-12):** PostGIS 3.3.7 is enabled locally. Only the city leader can draw/save colored region drafts, generate subdivisions with UTM long-axis bisection, edit vertices with Geoman, and save changes after PostGIS validation. Generated subdivision IDs remain stable by number. Initial publication and replacement are implemented: replacement requires explicit destinations for every active membership; the new map, archived publication, released/created membership rows, and audit records commit atomically. RLS exposes current membership names/areas only to city leadership, and the UI blocks publication until every destination is selected. Sector leaders cannot edit subdivisions. The participant UI loads published regions/subdivisions read-only through the RLS-scoped map RPC. Turf's actual-data geodesic estimate differs 0.24% from the PostGIS geodesic union, so its UI value is only a preview. See `docs/geo-data.md`.
 
@@ -357,23 +569,24 @@
 **Description:** Add act schema and create/edit/cancel forms for city-wide and subdivision scopes. City leaders manage all acts; sector leaders manage only acts in their assigned regions. A canceled act remains visible with registrations preserved.
 
 **Acceptance criteria:**
-- [ ] Act stores title, predefined category, start time, address/map point, one scope, and scheduled/cancelled status.
-- [ ] Only city leaders can create city-wide acts; sector leaders manage only assigned subdivisions.
-- [ ] Cancel changes status without deleting the act or registrations; no automatic notification is sent.
+- [x] Act stores title, predefined category, start time, address/map point, one generated scope, and scheduled/cancelled status.
+- [x] Only city leaders can create city-wide acts; sector leaders manage only assigned subdivisions.
+- [x] Cancel changes status without deleting the act; no automatic notification is sent.
 
 **Verification:**
-- [ ] `npm run test -- --run src/features/acts` passes act validation and management cases.
-- [ ] `npm run test:db` passes act RLS and city-perimeter point validation.
+- [x] `npm run test -- --run src/features/acts` passes service, scope, edit, and cancellation cases.
+- [x] `npm run test:db` passes act authorization, fail-closed identity, and city-perimeter point validation.
 - [ ] Manual check: create both act scopes, edit, cancel, and verify retained record.
 
 **Dependencies:** T10.
 
 **Files likely touched:**
-- `supabase/migrations/<acts-schema>.sql`
-- `supabase/tests/acts-rls.sql`
+- `supabase/migrations/20261013041136_acts_leadership_management.sql`
+- `supabase/tests/act_management.test_test.sql`
 - `src/features/acts/lib/actService.ts`
-- `src/features/acts/components/ActManagementForm.tsx`
-- `src/features/acts/lib/actService.test.ts`
+- `src/features/acts/components/ActManagement.tsx`
+- `src/features/acts/components/ActManagement.test.tsx`
+- `src/features/identity-access/components/AuthForm.tsx`
 
 **Estimated scope:** Medium.
 
@@ -382,23 +595,26 @@
 **Description:** Show upcoming/cancelled acts in agenda and map views and let any participant register for any Maringá act and cancel their own registration before its start.
 
 **Acceptance criteria:**
-- [ ] Participants can discover both city-wide and subdivision acts without being restricted by their own subdivision.
-- [ ] There is no capacity limit; a participant may register for multiple acts.
-- [ ] A participant sees their own registration state and can cancel it before start, but cannot see other participants' registrations.
+- [x] Participants can discover city-wide and subdivision acts in agenda and map views without being restricted by their own subdivision.
+- [x] There is no capacity limit; a participant may register for multiple acts while the database enforces one active registration per participant/act.
+- [x] Participants see their own registration state and can cancel it before start, but cannot read other participants' registrations.
 
 **Verification:**
-- [ ] `npm run test -- --run src/features/acts` passes agenda and registration tests.
-- [ ] `npm run test:db` denies access to other participants' registrations.
+- [x] `npm run test -- --run src/features/acts` covers agenda/map views, any-subdivision signup, and own-registration cancel.
+- [x] `npm run test:db` covers unlimited participants per act, multiple acts per participant, own-only reads, and cancellation timing/history.
 - [ ] Manual check: register for a subdivision act outside the participant's assigned area and cancel before start.
 
 **Dependencies:** T11.
 
 **Files likely touched:**
-- `src/features/acts/pages/AgendaPage.tsx`
-- `src/features/acts/components/ActCard.tsx`
-- `src/features/acts/components/ActMapLayer.tsx`
-- `src/features/acts/lib/registrationService.ts`
-- `src/features/acts/lib/registrationService.test.ts`
+- `supabase/migrations/20261013042540_participant_act_registrations.sql`
+- `supabase/tests/act_registration_behavior.test_test.sql`
+- `supabase/tests/act_registration_enrollment.test_test.sql`
+- `src/features/acts/components/ActAgenda.tsx`
+- `src/features/acts/components/ActAgenda.test.tsx`
+- `src/features/acts/lib/actService.ts`
+- `src/features/acts/lib/actService.test.ts`
+- `src/features/identity-access/components/AuthForm.tsx`
 
 **Estimated scope:** Medium.
 
@@ -407,22 +623,24 @@
 **Description:** Let authorized sector and city leaders view the signup roster for acts they can manage, including participant name and the WhatsApp link permitted by the identity spec.
 
 **Acceptance criteria:**
-- [ ] Participants cannot query attendee names, phone numbers, or roster counts if counts would reveal private registration data.
-- [ ] Assigned sector leaders see rosters for their subdivision acts; city leaders see all Maringá rosters.
-- [ ] WhatsApp links use normalized participant numbers and are rendered only in authorized views.
+- [x] Participants cannot query attendee names, phone numbers, or roster counts; direct registration reads remain self-only.
+- [x] Assigned sector leaders see rosters for assigned subdivision acts; city leaders see all Maringá rosters.
+- [x] WhatsApp links use normalized participant numbers and are rendered only in the authorized leadership panel.
 
 **Verification:**
-- [ ] `npm run test -- --run src/features/acts` passes role-specific roster tests.
-- [ ] `npm run test:db` verifies positive and negative roster/contact access.
+- [x] `npm run test -- --run src/features/acts` passes role-specific roster and contact-link tests.
+- [x] `npm run test:db` verifies city/assigned/unassigned/participant roster access and active-registration filtering.
 - [ ] Manual check: compare city-leader, assigned sector-leader, unassigned sector-leader, and participant views.
 
 **Dependencies:** T12.
 
 **Files likely touched:**
-- `src/features/acts/components/AttendeeRoster.tsx`
-- `src/features/acts/lib/attendeeService.ts`
-- `src/features/acts/components/AttendeeRoster.test.tsx`
-- `supabase/tests/attendee-privacy.sql`
+- `supabase/migrations/20261013043548_private_act_attendee_rosters.sql`
+- `supabase/tests/act_attendee_roster.test_test.sql`
+- `supabase/tests/act_attendee_roster_behavior.test_test.sql`
+- `src/features/acts/components/ActManagement.tsx`
+- `src/features/acts/lib/actService.ts`
+- `src/features/acts/components/ActManagement.test.tsx`
 
 **Estimated scope:** Small.
 
@@ -435,23 +653,25 @@
 **Description:** Add independent material-point CRUD with free-text material/topic, map point/address, and recurring weekly pickup windows. Both leadership roles manage all points; deleting a point also deletes its windows.
 
 **Acceptance criteria:**
-- [ ] Leaders can create/edit/delete a point without a region/subdivision association.
-- [ ] A point requires text material/topic, address, valid in-city coordinates, and at least one weekly window; multiple non-overlapping windows per weekday are supported.
-- [ ] Deleting the point removes associated pickup windows; participants cannot modify points.
+- [x] City and sector leaders can create/edit/delete a point without a region/subdivision association.
+- [x] A point requires free-text material/topic, address, in-city coordinates, and weekly windows; multiple non-overlapping windows per weekday are supported.
+- [x] Deleting a point cascades to its pickup windows; participants cannot modify points.
 
 **Verification:**
-- [ ] `npm run test -- --run src/features/material-points` covers point and schedule validation.
-- [ ] `npm run test:db` covers geometry, cascade, and both leader roles.
+- [x] `npm run test -- --run src/features/material-points` covers CRUD form, roles and multiple windows; service tests cover overlap/input validation.
+- [x] `npm run test:db` covers PostGIS perimeter checks, overlap rejection, cascade, participant denial, and both leader roles.
 - [ ] Manual check: create a point with two windows on one weekday, edit it, then delete it.
 
 **Dependencies:** T07; may proceed in parallel with T11-T13 after the map foundation is stable.
 
 **Files likely touched:**
-- `supabase/migrations/<material-points-schema>.sql`
-- `supabase/tests/material-points-rls.sql`
+- `supabase/migrations/20261013044125_independent_material_points_management.sql`
+- `supabase/tests/material_points_management.test_test.sql`
 - `src/features/material-points/lib/materialPointService.ts`
-- `src/features/material-points/components/MaterialPointForm.tsx`
+- `src/features/material-points/components/MaterialPointManagement.tsx`
 - `src/features/material-points/lib/materialPointService.test.ts`
+- `src/features/material-points/components/MaterialPointManagement.test.tsx`
+- `src/features/identity-access/components/AuthForm.tsx`
 
 **Estimated scope:** Medium.
 
@@ -460,22 +680,22 @@
 **Description:** Show points both as Leaflet markers and as a list, with matching details and text search/filter by free-text material/topic. Reuse the shared weekly-schedule editor/formatter where practical.
 
 **Acceptance criteria:**
-- [ ] Selecting a map marker or list row opens the same point details.
-- [ ] Participants can read material/topic, address, and all weekly pickup windows.
-- [ ] No reservation, stock count, or withdrawal confirmation controls appear.
+- [x] Selecting a map marker or list row opens the same point details; free-text search filters both views.
+- [x] Participants can read material/topic, address, and all weekly pickup windows.
+- [x] No reservation, stock count, or withdrawal confirmation controls appear.
 
 **Verification:**
-- [ ] `npm run test -- --run src/features/material-points` covers marker/list parity and details.
-- [ ] `npm run build` succeeds.
+- [x] `npm run test -- --run src/features/material-points` covers list/map parity, shared details, filtering, role visibility and no stock actions.
+- [x] `npm run build` succeeds.
 - [ ] Manual check: compare the same point's details from map and list at desktop and mobile sizes.
 
 **Dependencies:** T14.
 
 **Files likely touched:**
-- `src/features/material-points/pages/MaterialPointsPage.tsx`
-- `src/features/material-points/components/MaterialPointList.tsx`
-- `src/features/material-points/components/MaterialPointMapLayer.tsx`
-- `src/features/material-points/pages/MaterialPointsPage.test.tsx`
+- `src/features/material-points/components/MaterialPointDiscovery.tsx`
+- `src/features/material-points/components/MaterialPointDiscovery.test.tsx`
+- `src/features/identity-access/components/AuthForm.tsx`
+- `src/styles.css`
 
 **Estimated scope:** Medium.
 
@@ -487,15 +707,20 @@
 
 **Description:** Add Playwright coverage for the full pilot journey, run cross-module authorization/privacy checks, inspect responsive behavior, and review dependency/security findings.
 
+**Status note (2026-10-13):** As três jornadas Playwright passam localmente. Cobrem cadastro/login e disponibilidade persistida, inscrição territorial, registro/cancelamento em atos, descoberta de pontos na lista/mapa e visibilidade do roster por papel/região. A viewport móvel 390x844 não apresenta overflow horizontal. `npm audit` não encontrou vulnerabilidades; advisors locais não encontraram problemas; o bundle não contém formato de chave secreta privilegiada. Revisão manual com leitor de tela e validação em preview continuam pendentes antes da publicação.
+
 **Acceptance criteria:**
-- [ ] E2E covers signup/login, availability, map membership, act registration/cancellation and attendee privacy, and material-point map/list.
-- [ ] E2E confirms city leader, assigned sector leader, unassigned sector leader, and participant permissions.
-- [ ] Security review finds no unmitigated reachable critical/high dependency findings and no client-exposed privileged credentials.
+- [x] E2E covers signup/login, availability, map membership, act registration/cancellation and attendee privacy, and material-point map/list.
+- [x] E2E confirms city leader, assigned sector leader, unassigned sector leader, and participant permissions.
+- [x] Security review finds no unmitigated reachable critical/high dependency findings and no client-exposed privileged credentials.
 
 **Verification:**
-- [ ] `npm run test -- --run` passes.
-- [ ] `npm run test:e2e` passes against a clean local test environment.
-- [ ] `npm audit --audit-level=high` passes or documented deferrals include owner and review date.
+- [x] `npm run test -- --run` passes (108 tests).
+- [x] `npm run test:db` passes (319 assertions).
+- [x] `npm run typecheck`, `npm run lint`, and `npm run build` pass.
+- [x] `npm run test:e2e` passes against local Supabase (3 journeys); test fixtures are removed afterward.
+- [x] `npm audit --audit-level=high` reports zero vulnerabilities; `supabase db advisors --local --type security` reports no issues.
+- [x] Browser test at 390x844 confirms no horizontal document overflow and keeps participant modules visible.
 
 **Dependencies:** T10, T13, T15.
 
@@ -508,19 +733,25 @@
 
 **Estimated scope:** Medium.
 
-## Task T17: Prepare and verify a Vercel preview
+## Task T17: Prepare and verify the production deployment
 
-**Description:** Document required environment variables and configure a Vercel preview deployment for the static app; keep production launch separate from the MVP plan approval.
+**Description:** Document required production environment variables and configure the Vercel/Supabase production deployment for the static app; deploy only after legal, technical, and launch checks are approved.
+
+**Status note (2026-10-13):** `vercel.json` e o guia agora descrevem Production, incluindo confirmação de e-mail/SMTP e variáveis Production. Nenhum projeto Supabase/Vercel remoto está vinculado e nenhum deploy foi feito. O mapa ainda tem pendências de licença/atribuição e conferência GIS; o primeiro deploy Vercel de um projeto novo será público.
 
 **Acceptance criteria:**
-- [ ] Only the Supabase publishable/anon client key and project URL are exposed to the frontend; no service-role or database password is present.
-- [ ] Preview build succeeds with documented environment variables and client-side routes resolve.
-- [ ] Production deployment is not triggered without explicit release approval.
+- [x] Only the Supabase publishable client key and project URL are exposed to the frontend; no service-role or database password is configured for the client.
+- [ ] Production build succeeds with documented environment variables and client-side routes resolve.
+- [ ] Public deployment occurs only after Supabase/Auth readiness, map publication clearance, manual acceptance checks, and launch confirmation.
 
 **Verification:**
-- [ ] `npm run build` passes locally.
-- [ ] Vercel preview reports a successful build and loads auth/map routes.
-- [ ] Manual check: verify no secret values appear in the built client bundle or browser network responses.
+- [x] `npm run build` passes locally.
+- [x] Local configuration uses only the two documented public Supabase variables; `.env.example` contains placeholders only.
+- [x] Local Vite production preview serves `/` and a direct client-side path with the SPA shell (HTTP 200).
+- [ ] Production deployment reports a successful build and loads `/` and a client-side route.
+- [x] No remote deployment was triggered during this documentation/configuration step; first-deployment behavior and public-release checks are documented.
+- [x] Local built-bundle scan finds no privileged Supabase key format or server-only environment variable name.
+- [ ] Manual check on the production domain: verify auth/map routes, confirmation e-mail, and browser network responses contain no secret values.
 
 **Dependencies:** T16.
 
@@ -534,4 +765,4 @@
 
 ### Checkpoint: Complete
 - [ ] Every accepted spec criterion is verified by automated test or documented manual check.
-- [ ] Preview is reviewed by the human; production remains a separate release decision.
+- [ ] Production domain is reviewed by the human after the map and launch gates pass.

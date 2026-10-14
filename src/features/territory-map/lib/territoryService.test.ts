@@ -2,12 +2,16 @@ import type { Geometry } from 'geojson';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   generateSubdivisionDrafts,
+  createManualSubdivision,
+  loadMyActiveRegionMemberships,
   loadActiveSubdivisionMemberships,
   loadMyActiveSubdivisionMembership,
   loadVisibleRegionSet,
+  previewSubdivisionCuts,
   publishRegionPartition,
   saveRegionPartition,
   saveSubdivisionEdits,
+  setMyRegionMemberships,
   setMySubdivisionMembership,
   validateRegionPartition,
 } from './territoryService';
@@ -134,6 +138,84 @@ describe('generateSubdivisionDrafts', () => {
   });
 });
 
+describe('previewSubdivisionCuts', () => {
+  const preview = {
+    regionId: subdivisionResult.regionId,
+    baseToken: 'a'.repeat(32),
+    coverageDifferenceSquareMeters: 0,
+    cuts: [],
+    subdivisions: [{
+      ref: 'root', number: 1, geometry: subdivisionResult.subdivisions[0].geometry,
+      areaSquareMeters: 100, deviationPercent: 0,
+    }],
+  };
+
+  it('loads a canonical base without persisting a subdivision', async () => {
+    rpcMock.mockResolvedValueOnce({ data: preview, error: null });
+    await expect(previewSubdivisionCuts(preview.regionId, null, [])).resolves.toEqual(preview);
+    expect(rpcMock).toHaveBeenCalledWith('preview_subdivision_cuts', {
+      p_region_id: preview.regionId, p_base_token: null, p_cuts: [],
+    });
+  });
+
+  it('rejects a response for a different region', async () => {
+    rpcMock.mockResolvedValueOnce({ data: { ...preview, regionId: subdivisionResult.regionSetId }, error: null });
+    await expect(previewSubdivisionCuts(preview.regionId, null, [])).rejects.toThrow('Não foi possível calcular o corte.');
+  });
+
+  it('rejects malformed coordinates in a server response', async () => {
+    rpcMock.mockResolvedValueOnce({ data: { ...preview, subdivisions: [{ ...preview.subdivisions[0], geometry: { type: 'MultiPolygon', coordinates: [[[[0, 'bad']]]] } }] }, error: null });
+    await expect(previewSubdivisionCuts(preview.regionId, null, [])).rejects.toThrow('Não foi possível calcular o corte.');
+  });
+
+  it('translates a state conflict without exposing SQL details', async () => {
+    rpcMock.mockResolvedValueOnce({ data: null, error: { message: 'DRAFT_CONFLICT', code: '40001' } });
+    await expect(previewSubdivisionCuts(preview.regionId, null, [])).rejects.toThrow('A região mudou. Recarregue a base antes de continuar.');
+  });
+
+  it.each([
+    ['CUT_ENDPOINTS_OFF_BOUNDARY', 'O início e o fim precisam estar no limite da área selecionada.'],
+    ['CUT_OUTSIDE_TARGET', 'O traçado sai da área selecionada. Confira o alvo do corte.'],
+    ['CUT_FOLLOWS_BOUNDARY', 'O traçado acompanha a borda. O corte precisa atravessar o interior da área.'],
+  ])('explains the specific rejection %s', async (code, message) => {
+    rpcMock.mockResolvedValueOnce({ data: null, error: { message: code } });
+    await expect(previewSubdivisionCuts(preview.regionId, null, [])).rejects.toThrow(message);
+  });
+
+  it('rejects invalid input before calling the server', async () => {
+    await expect(previewSubdivisionCuts('not-a-region', null, [])).rejects.toThrow();
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('createManualSubdivision', () => {
+  const saved = { ...subdivisionResult.subdivisions[0], regionId: subdivisionResult.regionId };
+  const requestId = '45678901-1234-4234-8234-123456789abc';
+
+  it('creates one region-scoped subdivision with a stable request ID', async () => {
+    rpcMock.mockResolvedValueOnce({ data: saved, error: null });
+    await expect(createManualSubdivision(saved.regionId, square, requestId)).resolves.toEqual(saved);
+    expect(rpcMock).toHaveBeenCalledWith('create_manual_subdivision', {
+      p_region_id: saved.regionId, p_geometry: square, p_request_id: requestId,
+    });
+  });
+
+  it('rejects a response for another region', async () => {
+    rpcMock.mockResolvedValueOnce({ data: { ...saved, regionId: subdivisionResult.regionSetId }, error: null });
+    await expect(createManualSubdivision(saved.regionId, square, requestId)).rejects.toThrow('Não foi possível salvar a subregião.');
+  });
+
+  it('explains invalid geometry without exposing SQL', async () => {
+    rpcMock.mockResolvedValueOnce({ data: null, error: { message: 'MANUAL_GEOMETRY_INVALID' } });
+    await expect(createManualSubdivision(saved.regionId, square, requestId)).rejects.toThrow('O desenho não forma uma área válida dentro da região selecionada.');
+  });
+
+  it('rejects invalid inputs before calling the server', async () => {
+    await expect(createManualSubdivision('bad-id', square, requestId)).rejects.toThrow();
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('saveSubdivisionEdits', () => {
   it('sends the selected region and edited numbered geometries to PostGIS', async () => {
     const regionId = '23456789-1234-4234-8234-123456789abc';
@@ -232,6 +314,57 @@ describe('publishRegionPartition', () => {
 });
 
 describe('loadVisibleRegionSet', () => {
+  it('accepts valid subdivision numbers with gaps after automatic cleanup', async () => {
+    const report = {
+      regionSetId: subdivisionResult.regionSetId, status: 'published', publishedAt: '2026-10-12T12:00:00.000Z',
+      publishedRegionSetId: subdivisionResult.regionSetId, targetRegionCount: 1, isSystemDefault: false,
+      regions: [{ id: subdivisionResult.regionId, number: 1, name: null, color: '#123456',
+        geometry: subdivisionResult.subdivisions[0].geometry,
+        subdivisions: [{ ...subdivisionResult.subdivisions[0], number: 7 }],
+      }],
+    };
+    rpcMock.mockResolvedValueOnce({data:{initialized:false},error:null}).mockResolvedValueOnce({data:report,error:null});
+    await expect(loadVisibleRegionSet()).resolves.toEqual(report);
+  });
+
+  it('ensures Maringá defaults exist before loading the visible map', async () => {
+    const regionSet = {
+      regionSetId: '12345678-1234-4234-8234-123456789abc',
+      status: 'published',
+      publishedAt: '2026-10-12T12:00:00.000Z',
+      publishedRegionSetId: '12345678-1234-4234-8234-123456789abc',
+      targetRegionCount: 1,
+      isSystemDefault: true,
+      regions: [{
+        id: '23456789-1234-4234-8234-123456789abc',
+        number: 1,
+        name: 'GT Unicesumar e região',
+        color: '#123456',
+        geometry: { type: 'MultiPolygon', coordinates: [] },
+        subdivisions: [],
+      }],
+    };
+    rpcMock
+      .mockResolvedValueOnce({ data: { initialized: false }, error: null })
+      .mockResolvedValueOnce({ data: regionSet, error: null });
+
+    await expect(loadVisibleRegionSet()).resolves.toEqual(regionSet);
+
+    expect(rpcMock.mock.calls).toEqual([
+      ['ensure_maringa_default_regions'],
+      ['get_visible_region_set'],
+    ]);
+  });
+
+  it('does not load the visible map when default initialization fails', async () => {
+    rpcMock.mockResolvedValueOnce({ data: null, error: { message: 'Internal database error' } });
+
+    await expect(loadVisibleRegionSet()).rejects.toThrow(
+      'Não foi possível carregar o mapa de regiões. Tente novamente.',
+    );
+    expect(rpcMock.mock.calls).toEqual([['ensure_maringa_default_regions']]);
+  });
+
   it('returns only the geometry-safe region map report from the RLS-scoped RPC', async () => {
     const regionSet = {
       regionSetId: '12345678-1234-4234-8234-123456789abc',
@@ -239,9 +372,11 @@ describe('loadVisibleRegionSet', () => {
       publishedAt: '2026-10-12T12:00:00.000Z',
       publishedRegionSetId: '12345678-1234-4234-8234-123456789abc',
       targetRegionCount: 1,
+      isSystemDefault: false,
       regions: [{
         id: '23456789-1234-4234-8234-123456789abc',
         number: 1,
+        name: null,
         color: '#123456',
         geometry: { type: 'MultiPolygon', coordinates: [[[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]] },
         subdivisions: [{
@@ -251,10 +386,41 @@ describe('loadVisibleRegionSet', () => {
         }],
       }],
     };
-    rpcMock.mockResolvedValueOnce({ data: regionSet, error: null });
+    rpcMock
+      .mockResolvedValueOnce({ data: { initialized: false }, error: null })
+      .mockResolvedValueOnce({ data: regionSet, error: null });
 
     await expect(loadVisibleRegionSet()).resolves.toEqual(regionSet);
-    expect(rpcMock).toHaveBeenCalledWith('get_visible_region_set');
+    expect(rpcMock.mock.calls).toEqual([
+      ['ensure_maringa_default_regions'],
+      ['get_visible_region_set'],
+    ]);
+  });
+
+  it('rejects visible map responses without initialization metadata', async () => {
+    rpcMock
+      .mockResolvedValueOnce({ data: { initialized: false }, error: null })
+      .mockResolvedValueOnce({
+        data: {
+          regionSetId: '12345678-1234-4234-8234-123456789abc',
+          status: 'published',
+          publishedAt: '2026-10-12T12:00:00.000Z',
+          publishedRegionSetId: '12345678-1234-4234-8234-123456789abc',
+          targetRegionCount: 1,
+          regions: [{
+            id: '23456789-1234-4234-8234-123456789abc',
+            number: 1,
+            color: '#123456',
+            geometry: { type: 'MultiPolygon', coordinates: [] },
+            subdivisions: [],
+          }],
+        },
+        error: null,
+      });
+
+    await expect(loadVisibleRegionSet()).rejects.toThrow(
+      'Não foi possível carregar o mapa de regiões. Tente novamente.',
+    );
   });
 
   it('loads current memberships and area labels for city-leader realignment', async () => {
@@ -273,7 +439,9 @@ describe('loadVisibleRegionSet', () => {
   });
 
   it('returns null when the current user has no visible region set', async () => {
-    rpcMock.mockResolvedValueOnce({ data: null, error: null });
+    rpcMock
+      .mockResolvedValueOnce({ data: { initialized: false }, error: null })
+      .mockResolvedValueOnce({ data: null, error: null });
 
     await expect(loadVisibleRegionSet()).resolves.toBeNull();
   });
@@ -319,5 +487,39 @@ describe('participant subdivision membership', () => {
 
     await expect(setMySubdivisionMembership('56789012-1234-4234-8234-123456789abc'))
       .rejects.toThrow('Não foi possível salvar sua inscrição na subdivisão. Tente novamente.');
+  });
+});
+
+describe('participant map division memberships', () => {
+  it('loads all active map divisions through the participant-scoped RPC', async () => {
+    const regionIds = [
+      '56789012-1234-4234-8234-123456789abc',
+      '67890123-1234-4234-8234-123456789abc',
+    ];
+    rpcMock.mockResolvedValueOnce({ data: regionIds, error: null });
+
+    await expect(loadMyActiveRegionMemberships()).resolves.toEqual(regionIds);
+    expect(rpcMock).toHaveBeenCalledWith('get_my_active_region_memberships');
+  });
+
+  it('saves multiple map division choices through one validated RPC', async () => {
+    const regionIds = [
+      '56789012-1234-4234-8234-123456789abc',
+      '67890123-1234-4234-8234-123456789abc',
+    ];
+    rpcMock.mockResolvedValueOnce({ data: regionIds, error: null });
+
+    await expect(setMyRegionMemberships(regionIds)).resolves.toEqual(regionIds);
+    expect(rpcMock).toHaveBeenCalledWith('set_my_region_memberships', {
+      p_region_ids: regionIds,
+    });
+  });
+
+  it('rejects duplicate map division choices before calling the RPC', async () => {
+    const regionId = '56789012-1234-4234-8234-123456789abc';
+
+    await expect(setMyRegionMemberships([regionId, regionId]))
+      .rejects.toThrow('Não foi possível salvar suas inscrições nas divisões. Tente novamente.');
+    expect(rpcMock).not.toHaveBeenCalled();
   });
 });

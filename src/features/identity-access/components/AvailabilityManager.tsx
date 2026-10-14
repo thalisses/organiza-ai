@@ -90,6 +90,7 @@ export default function AvailabilityManager() {
           {notice && <p className="auth-notice" role="status">{notice}</p>}
           <form onSubmit={handleSubmit}>
             <AvailabilityEditor
+              allowMultipleDays
               disabled={isSaving}
               onChange={(updatedWindows) => {
                 setWindows(updatedWindows);

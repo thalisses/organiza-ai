@@ -28,6 +28,8 @@ const subdivisionEditErrorMessage = 'Não foi possível salvar as alterações d
 const publicationErrorMessage = 'Não foi possível publicar o mapa. Confira a validação e se já existe um mapa publicado.';
 const membershipLoadErrorMessage = 'Não foi possível carregar sua inscrição na subdivisão. Tente novamente.';
 const membershipSaveErrorMessage = 'Não foi possível salvar sua inscrição na subdivisão. Tente novamente.';
+const regionMembershipLoadErrorMessage = 'Não foi possível carregar suas inscrições nas divisões. Tente novamente.';
+const regionMembershipSaveErrorMessage = 'Não foi possível salvar suas inscrições nas divisões. Tente novamente.';
 
 export interface GeneratedSubdivision {
   id: string;
@@ -49,6 +51,154 @@ export interface SubdivisionGenerationResult {
 export interface SubdivisionEditInput {
   number: number;
   geometry: Geometry;
+}
+
+export interface SubdivisionCut {
+  targetRef: string;
+  mode?: 'split' | 'area';
+  line: Extract<Geometry, { type: 'LineString' }>;
+}
+
+export interface SubdivisionCutPreview {
+  regionId: string;
+  baseToken: string;
+  coverageDifferenceSquareMeters: number;
+  cuts: SubdivisionCut[];
+  subdivisions: Array<{
+    ref: string;
+    number: number;
+    geometry: Extract<Geometry, { type: 'MultiPolygon' }>;
+    areaSquareMeters: number;
+    deviationPercent: number;
+  }>;
+}
+
+export interface ManualSubdivision extends VisibleSubdivision {
+  regionId: string;
+  areaSquareMeters: number;
+}
+
+export async function createManualSubdivision(
+  regionId: string,
+  geometry: Extract<Geometry, { type: 'Polygon' | 'MultiPolygon' }>,
+  requestId: string,
+): Promise<ManualSubdivision> {
+  const fallback = 'Não foi possível salvar a subregião. Tente novamente.';
+  const normalized = geometry.type === 'Polygon' ? { type: 'MultiPolygon' as const, coordinates: [geometry.coordinates] } : geometry;
+  if (!isUuid(regionId) || !isUuid(requestId) || !isCutMultiPolygon(normalized)
+    || new TextEncoder().encode(JSON.stringify(geometry)).length > 1048576) throw new Error(fallback);
+  let response;
+  try {
+    response = await getSupabaseClient().rpc('create_manual_subdivision', {
+      p_region_id: regionId, p_geometry: geometry, p_request_id: requestId,
+    });
+  } catch {
+    throw new Error(fallback);
+  }
+  const messages: Record<string, string> = {
+    MANUAL_GEOMETRY_INVALID: 'O desenho não forma uma área válida dentro da região selecionada.',
+    MANUAL_LIMIT_EXCEEDED: 'Esta região já atingiu o limite de 50 subregiões.',
+    MANUAL_REQUEST_CONFLICT: 'Esta conclusão já foi usada para outro desenho. Inicie um novo cadastro.',
+  };
+  if (response.error) throw new Error(messages[response.error.message] ?? fallback);
+  const value = response.data as Record<string, unknown> | null;
+  if (!value || value.regionId !== regionId || typeof value.id !== 'string' || !isUuid(value.id)
+    || typeof value.number !== 'number' || !Number.isInteger(value.number) || value.number < 1
+    || !isCutMultiPolygon(value.geometry) || typeof value.areaSquareMeters !== 'number'
+    || !Number.isFinite(value.areaSquareMeters) || value.areaSquareMeters <= 0) throw new Error(fallback);
+  return response.data as ManualSubdivision;
+}
+
+const cutErrorMessages: Record<string, string> = {
+  CUT_INVALID: 'O corte deve ligar dois pontos do limite, sem sair da área nem cruzar a si mesmo.',
+  CUT_ENDPOINTS_OFF_BOUNDARY: 'O início e o fim precisam estar no limite da área selecionada.',
+  CUT_OUTSIDE_TARGET: 'O traçado sai da área selecionada. Confira o alvo do corte.',
+  CUT_FOLLOWS_BOUNDARY: 'O traçado acompanha a borda. O corte precisa atravessar o interior da área.',
+  CUT_TARGET_NOT_FOUND: 'Selecione uma área válida para o corte.',
+  CUT_LIMIT_EXCEEDED: 'O limite de áreas ou pontos do desenho foi atingido.',
+  DRAFT_CONFLICT: 'A região mudou. Recarregue a base antes de continuar.',
+};
+
+export async function previewSubdivisionCuts(
+  regionId: string,
+  baseToken: string | null,
+  cuts: SubdivisionCut[],
+): Promise<SubdivisionCutPreview> {
+  const fallbackMessage = 'Não foi possível calcular o corte. Tente novamente.';
+  if (!isUuid(regionId) || (baseToken !== null && !/^[a-f0-9]{32}$/.test(baseToken))
+    || cuts.length > 49 || !cuts.every(isSubdivisionCut)
+    || (cuts.length > 0 && baseToken === null)
+    || new TextEncoder().encode(JSON.stringify(cuts)).length > 1048576) {
+    throw new Error(fallbackMessage);
+  }
+  let response;
+  try {
+    response = await getSupabaseClient().rpc('preview_subdivision_cuts', {
+      p_region_id: regionId, p_base_token: baseToken, p_cuts: cuts,
+    });
+  } catch {
+    throw new Error(fallbackMessage);
+  }
+  if (response.error) {
+    throw new Error(cutErrorMessages[response.error.message] ?? fallbackMessage);
+  }
+  if (!isSubdivisionCutPreview(response.data, regionId, cuts.length)) {
+    throw new Error(fallbackMessage);
+  }
+  return response.data;
+}
+
+function isCoordinate(value: unknown): value is [number, number] {
+  return Array.isArray(value) && value.length === 2
+    && typeof value[0] === 'number' && Number.isFinite(value[0]) && Math.abs(value[0]) <= 180
+    && typeof value[1] === 'number' && Number.isFinite(value[1]) && Math.abs(value[1]) <= 90;
+}
+
+function isSubdivisionCut(value: unknown): value is SubdivisionCut {
+  if (!value || typeof value !== 'object') return false;
+  const cut = value as Record<string, unknown>;
+  if (cut.mode !== undefined && cut.mode !== 'split' && cut.mode !== 'area') return false;
+  if (typeof cut.targetRef !== 'string' || !cut.targetRef || cut.targetRef.length > 512
+    || !cut.line || typeof cut.line !== 'object') return false;
+  const line = cut.line as Record<string, unknown>;
+  return line.type === 'LineString' && Array.isArray(line.coordinates)
+    && line.coordinates.length >= (cut.mode === 'area' ? 3 : 2) && line.coordinates.length <= 10000
+    && line.coordinates.every(isCoordinate);
+}
+
+function isCutMultiPolygon(value: unknown): boolean {
+  if (!isMultiPolygon(value) || value.coordinates.length === 0) return false;
+  let vertexCount = 0;
+  return value.coordinates.every((polygon) => Array.isArray(polygon) && polygon.length > 0
+    && polygon.every((ring) => {
+      if (!Array.isArray(ring) || ring.length < 4 || !ring.every(isCoordinate)) return false;
+      vertexCount += ring.length;
+      return vertexCount <= 10000 && ring[0][0] === ring[ring.length - 1][0]
+        && ring[0][1] === ring[ring.length - 1][1];
+    }));
+}
+
+function isSubdivisionCutPreview(value: unknown, regionId: string, cutCount: number): value is SubdivisionCutPreview {
+  if (!value || typeof value !== 'object') return false;
+  const preview = value as Record<string, unknown>;
+  if (preview.regionId !== regionId || typeof preview.baseToken !== 'string'
+    || !/^[a-f0-9]{32}$/.test(preview.baseToken)
+    || typeof preview.coverageDifferenceSquareMeters !== 'number'
+    || !Number.isFinite(preview.coverageDifferenceSquareMeters)
+    || preview.coverageDifferenceSquareMeters < 0 || preview.coverageDifferenceSquareMeters > 0.01
+    || !Array.isArray(preview.cuts) || preview.cuts.length !== cutCount || !preview.cuts.every(isSubdivisionCut)
+    || !Array.isArray(preview.subdivisions) || preview.subdivisions.length < 1 || preview.subdivisions.length > 50) return false;
+  const refs = new Set<string>();
+  return preview.subdivisions.every((value, index) => {
+    if (!value || typeof value !== 'object') return false;
+    const area = value as Record<string, unknown>;
+    if (typeof area.ref !== 'string' || !area.ref || refs.has(area.ref) || area.number !== index + 1
+      || !isCutMultiPolygon(area.geometry)
+      || typeof area.areaSquareMeters !== 'number' || !Number.isFinite(area.areaSquareMeters) || area.areaSquareMeters <= 0
+      || typeof area.deviationPercent !== 'number' || !Number.isFinite(area.deviationPercent) || area.deviationPercent < 0) return false;
+    refs.add(area.ref);
+    return true;
+  });
 }
 
 export interface SubdivisionEditResult {
@@ -106,6 +256,7 @@ export interface VisibleSubdivision {
 export interface VisibleRegion {
   id: string;
   number: number;
+  name: string | null;
   color: string;
   geometry: Extract<Geometry, { type: 'MultiPolygon' }>;
   subdivisions: VisibleSubdivision[];
@@ -117,6 +268,7 @@ export interface VisibleRegionSet {
   publishedAt: string | null;
   publishedRegionSetId: string | null;
   targetRegionCount: number;
+  isSystemDefault: boolean;
   regions: VisibleRegion[];
 }
 
@@ -268,9 +420,45 @@ export async function setMySubdivisionMembership(subdivisionId: string): Promise
   }
 }
 
+export async function loadMyActiveRegionMemberships(): Promise<string[]> {
+  try {
+    const { data, error } = await getSupabaseClient().rpc('get_my_active_region_memberships');
+    if (error || !isRegionMembershipIds(data)) {
+      throw new Error();
+    }
+    return data;
+  } catch {
+    throw new Error(regionMembershipLoadErrorMessage);
+  }
+}
+
+export async function setMyRegionMemberships(regionIds: string[]): Promise<string[]> {
+  try {
+    if (!isRegionMembershipIds(regionIds) || regionIds.length > 50) {
+      throw new Error();
+    }
+    const { data, error } = await getSupabaseClient().rpc('set_my_region_memberships', {
+      p_region_ids: regionIds,
+    });
+    if (error || !isRegionMembershipIds(data) || data.length !== regionIds.length
+      || !regionIds.every((regionId) => data.includes(regionId))) {
+      throw new Error();
+    }
+    return data;
+  } catch {
+    throw new Error(regionMembershipSaveErrorMessage);
+  }
+}
+
 export async function loadVisibleRegionSet(): Promise<VisibleRegionSet | null> {
   try {
-    const { data, error } = await getSupabaseClient().rpc('get_visible_region_set');
+    const client = getSupabaseClient();
+    const { error: initializationError } = await client.rpc('ensure_maringa_default_regions');
+    if (initializationError) {
+      throw new Error();
+    }
+
+    const { data, error } = await client.rpc('get_visible_region_set');
     if (error || data === null) {
       if (data === null && !error) {
         return null;
@@ -307,6 +495,13 @@ function isRegionPartitionValidation(value: unknown): value is RegionPartitionVa
 
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function isRegionMembershipIds(value: unknown): value is string[] {
+  if (!Array.isArray(value) || !value.every((regionId) => typeof regionId === 'string' && isUuid(regionId))) {
+    return false;
+  }
+  return new Set(value).size === value.length;
 }
 
 function isSubdivisionGenerationResult(
@@ -405,6 +600,7 @@ function isVisibleRegionSet(value: unknown): value is VisibleRegionSet {
     || (typeof set.publishedAt !== 'string' && set.publishedAt !== null)
     || (typeof set.publishedRegionSetId !== 'string' && set.publishedRegionSetId !== null)
     || typeof set.targetRegionCount !== 'number'
+    || typeof set.isSystemDefault !== 'boolean'
     || !Array.isArray(set.regions)
     || set.regions.length !== set.targetRegionCount
   ) {
@@ -416,22 +612,28 @@ function isVisibleRegionSet(value: unknown): value is VisibleRegionSet {
       return false;
     }
     const region = item as Record<string, unknown>;
+    const numbers = new Set<number>();
+    const identifiers = new Set<string>();
     return region.number === index + 1
       && typeof region.id === 'string'
       && isUuid(region.id)
+      && (typeof region.name === 'string' || region.name === null)
+      && (!set.isSystemDefault || typeof region.name === 'string')
       && typeof region.color === 'string'
       && /^#[0-9a-f]{6}$/i.test(region.color)
       && isMultiPolygon(region.geometry)
       && Array.isArray(region.subdivisions)
-      && region.subdivisions.every((subdivision, subdivisionIndex) => {
+      && region.subdivisions.every((subdivision) => {
         if (!subdivision || typeof subdivision !== 'object') {
           return false;
         }
         const entry = subdivision as Record<string, unknown>;
-        return entry.number === subdivisionIndex + 1
-          && typeof entry.id === 'string'
-          && isUuid(entry.id)
-          && isMultiPolygon(entry.geometry);
+        if (typeof entry.number !== 'number' || !Number.isInteger(entry.number) || entry.number < 1
+          || numbers.has(entry.number) || typeof entry.id !== 'string' || !isUuid(entry.id)
+          || identifiers.has(entry.id) || !isMultiPolygon(entry.geometry)) return false;
+        numbers.add(entry.number);
+        identifiers.add(entry.id);
+        return true;
       });
   });
 }
