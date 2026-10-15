@@ -74,7 +74,7 @@ export default function AuthForm() {
         setNotice(
           result.session
             ? 'Sessão iniciada.'
-            : 'Conta criada. Entre para continuar.',
+            : 'Conta criada. Confirme seu e-mail antes de entrar.',
         );
       } else {
         const result = await signIn({ email, password });

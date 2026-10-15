@@ -182,8 +182,9 @@ describe('AuthForm', () => {
     expect(screen.getByRole('button', { name: 'Entrar na conta' })).toBeTruthy();
   });
 
-  it('submits signup details and reflects the active session', async () => {
+  it('asks the user to confirm email when signup returns no session', async () => {
     const user = userEvent.setup();
+    signUpMock.mockResolvedValueOnce({ session: null });
     render(<AuthForm />);
     await user.click(screen.getByRole('button', { name: 'Criar conta' }));
     await user.type(screen.getByLabelText('Seu nome'), 'Participante Um');
@@ -212,7 +213,9 @@ describe('AuthForm', () => {
         { dayOfWeek: 3, startsAt: '09:00', endsAt: '12:00' },
       ],
     });
-    expect(await screen.findByText('Sessão iniciada.')).toBeTruthy();
+    expect(await screen.findByText(
+      'Conta criada. Confirme seu e-mail antes de entrar.',
+    )).toBeTruthy();
   });
 
   it('shows a generic error returned by the Auth service', async () => {

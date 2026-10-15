@@ -1,12 +1,12 @@
 # Preparar o deploy em Produção
 
-O destino escolhido é Produção, sem exigir um Preview antes. O repositório já tem build estático e configuração Vercel; os projetos Supabase/Vercel remotos, domínio, variáveis e deploy ainda não foram configurados por este workspace.
+O destino escolhido é Produção, sem exigir um Preview antes. O projeto Supabase de Produção já está vinculado a este workspace; as migrations foram aplicadas e os sete perímetros foram conferidos. O Auth permite cadastro, não exige confirmação de e-mail por decisão operacional, e já tem Site URL/redirect configurados. O SMTP está preenchido parcialmente, mas aguarda credenciais Brevo e autenticação DNS do remetente. Ainda faltam a conta inicial de liderança, Vercel, domínio final, deploy e testes manuais.
 
 ## O que falta
 
 - [ ] **Bloqueio para divulgação pública:** confirmar com a Prefeitura licença/atribuição do mapa e fazer a conferência GIS. Detalhes em [geo-data.md](geo-data.md).
-- [ ] Criar um projeto Supabase de Produção separado, aplicar/revisar migrations e confirmar os sete perímetros.
-- [ ] Configurar Auth com confirmação de e-mail e SMTP de produção; adaptar/testar a mensagem de cadastro para orientar quem ainda não confirmou.
+- [x] Criar o projeto Supabase de Produção separado, aplicar as migrations e confirmar os sete perímetros.
+- [ ] Concluir SMTP de produção no Brevo e testar entrega. A confirmação de e-mail está desativada por decisão operacional; contas podem entrar sem verificar o endereço.
 - [ ] Criar a conta inicial de liderança no projeto de Produção usando [leader-bootstrap.md](leader-bootstrap.md) e credencial administrativa apenas no SQL Editor.
 - [ ] Configurar variáveis Production, domínio e branch de produção na Vercel; o primeiro deploy será público.
 - [ ] Executar os testes manuais e o checklist pós-deploy desta página.
@@ -22,17 +22,16 @@ O plano Free pode servir para uma primeira operação pequena, mas projetos inat
 Em **Authentication → Sign In / Providers → Email**:
 
 - Permita novos cadastros.
-- Ative **Confirm email** para Produção, assim cadastros só entram depois de validar o endereço.
+- **Confirm email está desativado por decisão operacional:** cadastros podem entrar sem validar o endereço. Se essa decisão mudar, ative a opção antes de abrir o cadastro público e teste o fluxo de confirmação.
 - Não habilite login anônimo.
 - Configure um SMTP próprio em **Authentication → SMTP Settings**. O SMTP padrão do Supabase é restrito a endereços da equipe e tem limite baixo; não serve para enviar confirmações ao público. Um provedor pode ter cota gratuita, mas confira limites e entregabilidade. Configure SPF/DKIM/DMARC para o domínio de envio quando o provedor oferecer.
 - Revise o template **Confirm signup** e mantenha o link `{{ .ConfirmationURL}}` funcional. Senhas SMTP ficam somente no painel Supabase, nunca em `VITE_*` ou no repositório.
 
-**Ajuste necessário no app:** com confirmação ligada, o `signUp` pode retornar sem sessão. Antes de abrir o cadastro, atualize a mensagem atual “Conta criada. Entre para continuar.” para instruir a pessoa a confirmar pelo e-mail e depois entrar; teste o retorno do link no domínio final.
+**Mensagem de cadastro:** se a confirmação for ativada no futuro, o `signUp` pode retornar sem sessão. O app já orienta a pessoa a confirmar o e-mail antes de entrar; o retorno do link ainda precisará ser testado no domínio final.
 
 Em **Authentication → URL Configuration**:
 
-- Defina **Site URL** como o domínio final de Produção, com `https://` (por exemplo, `https://seu-dominio.com`).
-- Em **Redirect URLs**, permita esse domínio exato e os caminhos usados pelo fluxo de confirmação. Não use curingas amplos em Produção. Só inclua um domínio `vercel.app` se ele for realmente o domínio público escolhido.
+- **Já configurado:** Site URL `https://organiza-ai-esquerda.vercel.app` e o mesmo endereço como redirect permitido exato, sem curingas. Atualize ambos se o domínio público mudar.
 - Não permita URLs de Preview, localhost ou domínios de terceiros neste projeto produtivo, salvo necessidade explícita e revisada.
 
 ### Aplicar o banco
@@ -57,6 +56,8 @@ supabase migration list --linked
 ```
 
 Não use `--include-seed` sem revisar os dados de seed. As tabelas públicas têm grants explícitos nas migrations; não habilite permissões amplas para “fazer a API funcionar”. O Data API e as políticas RLS/grants são controles separados.
+
+Após a aplicação, `supabase db advisors --linked` reportou um aviso intencional para `public.set_sector_leader`: a função `SECURITY DEFINER` concede execução somente a `authenticated` e valida no banco o papel de liderança da cidade. O teste [identity_role_assignment.test_test.sql](../supabase/tests/identity_role_assignment.test_test.sql) cobre as permissões e recusas; preserve essas verificações ao revisar o aviso.
 
 No SQL Editor do projeto de Produção, confirme que os sete perímetros chegaram:
 

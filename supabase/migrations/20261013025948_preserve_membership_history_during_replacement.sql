@@ -1,5 +1,3 @@
-alter table private.subdivision_membership_realignments
-add column new_membership_id uuid references public.subdivision_memberships (id);
 create or replace function private.publish_region_partition_with_realignment(
         p_region_set_id uuid,
         p_membership_reassignments jsonb
